@@ -14,6 +14,7 @@ pub mod checkpoint_stream;
 pub mod detect;
 pub mod extract;
 pub mod format;
+pub mod host_dirs;
 #[cfg(target_os = "macos")]
 pub mod macho;
 pub mod packer;
