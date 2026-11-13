@@ -1625,7 +1625,7 @@ fn installed_agent_rootfs() -> Option<std::path::PathBuf> {
     {
         return None;
     }
-    dirs::data_local_dir()
+    smolvm_pack::host_dirs::data_local_dir()
         .map(|d| d.join("smolvm/agent-rootfs"))
         .filter(|d| d.is_dir())
 }

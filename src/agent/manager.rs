@@ -1403,8 +1403,8 @@ fn read_egress_telemetry_at(path: &Path) -> Option<u64> {
 
 /// Cache root: `<cache_dir>/smolvm/vms/`.
 pub fn vm_cache_root() -> PathBuf {
-    dirs::cache_dir()
-        .or_else(dirs::data_local_dir)
+    smolvm_pack::host_dirs::cache_dir()
+        .or_else(smolvm_pack::host_dirs::data_local_dir)
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("smolvm")
         .join("vms")
@@ -1774,8 +1774,8 @@ impl AgentManager {
         let smolvm_runtime = if let Some(ref vm_name) = name {
             vm_data_dir(vm_name)
         } else {
-            dirs::runtime_dir()
-                .or_else(dirs::cache_dir)
+            smolvm_pack::host_dirs::runtime_dir()
+                .or_else(smolvm_pack::host_dirs::cache_dir)
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join("smolvm")
         };
@@ -1985,8 +1985,8 @@ impl AgentManager {
             }
         }
 
-        let data_dir = dirs::data_local_dir()
-            .or_else(dirs::data_dir)
+        let data_dir = smolvm_pack::host_dirs::data_local_dir()
+            .or_else(smolvm_pack::host_dirs::data_dir)
             .ok_or_else(|| Error::storage("resolve path", "could not determine data directory"))?;
 
         Ok(data_dir.join("smolvm").join("agent-rootfs"))
@@ -2057,7 +2057,7 @@ impl AgentManager {
             .unwrap_or(0);
         let key = format!("{:x}-{:x}", meta.len(), mtime);
 
-        let base = dirs::cache_dir()
+        let base = smolvm_pack::host_dirs::cache_dir()
             .ok_or_else(|| Error::storage("resolve cache dir", "no cache directory"))?
             .join("smolvm")
             .join("rootfs");
@@ -3694,6 +3694,11 @@ impl AgentManager {
         // `features.watch_parent = Some(false)` — otherwise its persistent
         // machines die the moment the CLI process exits.
         let watch_parent = features.watch_parent.unwrap_or(boot_binary.is_some());
+        // Fail now, with the reason, rather than after the 40-second readiness
+        // timeout a state directory without working AF_UNIX sockets ends in.
+        #[cfg(windows)]
+        crate::platform::windows::check_state_dir()
+            .map_err(|reason| Error::agent("check the state directory", reason))?;
         let boot_exe =
             vm_boot_executable().map_err(|e| Error::agent("find smolvm binary", e.to_string()))?;
         let mut cmd = std::process::Command::new(&boot_exe);
