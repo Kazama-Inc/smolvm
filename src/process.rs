@@ -4313,6 +4313,68 @@ pub fn detach_stdio_to_stderr_file(path: &std::path::Path) -> std::io::Result<()
     Ok(())
 }
 
+/// Windows counterpart of [`exit_when_parent_is_not_with`]: exit this process
+/// once the process `parent` has exited, running `before_exit` first.
+///
+/// Windows does not reparent orphans, so instead of polling `getppid` a thread
+/// waits on a handle to the parent, which signals however the parent ends,
+/// TerminateProcess included. The handle is opened here, before returning, so a
+/// parent that dies later is always caught. A pid can be reused once its
+/// process is gone, so a process created after this one is not taken for the
+/// parent: then, like a parent that is already gone, the watchdog fires at once.
+#[cfg(windows)]
+pub fn exit_when_process_exits_with(parent: u32, before_exit: impl FnOnce() + Send + 'static) {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetProcessTimes, OpenProcess, WaitForSingleObject, INFINITE,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+
+    fn created(process: HANDLE) -> Option<u64> {
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: `process` is a valid process handle with query access and the
+        // out-pointers are valid for the call.
+        let ok =
+            unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) };
+        (ok != 0).then(|| (creation.dwHighDateTime as u64) << 32 | creation.dwLowDateTime as u64)
+    }
+
+    // SAFETY: OpenProcess has no memory-safety preconditions; a null result is
+    // handled below.
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            parent,
+        )
+    };
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing.
+    let ours = created(unsafe { GetCurrentProcess() });
+    let is_parent = !handle.is_null()
+        && matches!((created(handle), ours), (Some(theirs), Some(ours)) if theirs <= ours);
+    if !is_parent {
+        if !handle.is_null() {
+            // SAFETY: `handle` was returned by OpenProcess and is closed once.
+            unsafe { CloseHandle(handle) };
+        }
+        before_exit();
+        exit_child(0);
+    }
+    let handle = handle as usize; // HANDLE is a raw pointer; move it as an integer
+    let _ = std::thread::Builder::new()
+        .name("parent-death-watch".into())
+        .spawn(move || {
+            // SAFETY: the handle stays open for the life of the process.
+            unsafe { WaitForSingleObject(handle as HANDLE, INFINITE) };
+            before_exit();
+            exit_child(0);
+        });
+}
+
 /// Exit this process once `parent` is no longer its parent.
 ///
 /// When the parent dies, the kernel reparents this process (to init, launchd

@@ -180,8 +180,32 @@ fn state_dir_from_args(
 }
 
 fn main() {
+    #[cfg(windows)]
+    restrict_dll_search();
     cli::broken_pipe::install();
     cli::broken_pipe::run(run_cli);
+}
+
+/// Load DLLs only from this executable's directory (krun.dll and
+/// libkrunfw.dll ship beside it), System32 and directories added with
+/// AddDllDirectory: never from the current directory or PATH, where a planted
+/// DLL would otherwise be picked up by a later LoadLibrary. libkrun is loaded
+/// by full path, which this does not change. Runs first, before anything loads
+/// a library, and applies to the boot helper (`_boot-vm`) as well as the CLI.
+#[cfg(windows)]
+fn restrict_dll_search() {
+    use windows_sys::Win32::System::LibraryLoader::{
+        SetDefaultDllDirectories, LOAD_LIBRARY_SEARCH_APPLICATION_DIR,
+        LOAD_LIBRARY_SEARCH_SYSTEM32, LOAD_LIBRARY_SEARCH_USER_DIRS,
+    };
+    // SAFETY: takes only flags; a failure leaves the default search order.
+    unsafe {
+        SetDefaultDllDirectories(
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR
+                | LOAD_LIBRARY_SEARCH_SYSTEM32
+                | LOAD_LIBRARY_SEARCH_USER_DIRS,
+        )
+    };
 }
 
 fn run_cli() {

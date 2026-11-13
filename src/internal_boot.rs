@@ -100,9 +100,8 @@ pub fn run(config_path: PathBuf) -> crate::Result<()> {
     // the manager signals this via SMOLVM_BOOT_WATCH_PARENT=1. The CLI detaches
     // its VM on purpose and `serve` reconnects to surviving VMs, so for those the
     // parent exiting is normal and the watchdog stays off.
-    // The getppid()-based reparenting check is POSIX-specific; on Windows the
-    // parent-death watchdog is not wired up (the SDK in-process embedder path is
-    // a Unix concern here).
+    // On Windows orphans are not reparented, so the manager passes its pid in
+    // SMOLVM_BOOT_PARENT_PID and the watchdog waits on a handle to it instead.
     //
     // Before exiting it shuts the guest down cleanly once it knows how to reach
     // the agent, as `machine stop` does: otherwise writes the guest had not
@@ -116,6 +115,22 @@ pub fn run(config_path: PathBuf) -> crate::Result<()> {
             }
         });
     }
+    #[cfg(windows)]
+    if std::env::var_os("SMOLVM_BOOT_WATCH_PARENT").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        match std::env::var("SMOLVM_BOOT_PARENT_PID")
+            .ok()
+            .and_then(|pid| pid.parse::<u32>().ok())
+        {
+            Some(parent) => crate::process::exit_when_process_exits_with(parent, || {
+                if let Some(socket) = AGENT_SOCKET.get() {
+                    flush_guest_before_exit(socket);
+                }
+            }),
+            None => tracing::warn!(
+                "SMOLVM_BOOT_WATCH_PARENT=1 without SMOLVM_BOOT_PARENT_PID; not watching the owner"
+            ),
+        }
+    }
 
     // Read boot config
     let config_data = std::fs::read(&config_path)
@@ -125,7 +140,6 @@ pub fn run(config_path: PathBuf) -> crate::Result<()> {
 
     // Clean up the config file — it's no longer needed
     let _ = std::fs::remove_file(&config_path);
-    #[cfg(unix)]
     let _ = AGENT_SOCKET.set(config.vsock_socket.clone());
 
     // Redirect stdio. When SMOLVM_GPU_DEBUG=1, keep stderr pointed at a
@@ -1001,19 +1015,16 @@ mod backing_chain_tests {
 
 /// The guest agent's socket, known once the boot config is read, for the
 /// parent-death watchdog's clean shutdown.
-#[cfg(unix)]
 static AGENT_SOCKET: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// Longest the parent-death watchdog waits for the guest to shut down before
 /// exiting regardless.
-#[cfg(unix)]
 const PARENT_DEATH_SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Ask the guest to freeze and flush its filesystems and power off, as `machine
 /// stop` does, so a VM whose owner exited keeps what it wrote. Best-effort: an
 /// agent that cannot be reached, or does not answer in time, is left to the
 /// exit that follows.
-#[cfg(unix)]
 fn flush_guest_before_exit(socket: &std::path::Path) {
     let shutdown = crate::agent::AgentClient::connect(socket)
         .and_then(|mut client| client.shutdown_within(PARENT_DEATH_SHUTDOWN));
