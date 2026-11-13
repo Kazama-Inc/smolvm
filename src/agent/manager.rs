@@ -3758,6 +3758,9 @@ impl AgentManager {
                 "SMOLVM_BOOT_WATCH_PARENT",
                 if watch_parent { "1" } else { "0" },
             )
+            // Windows has no getppid-style reparenting to watch for; the
+            // helper waits on a handle to this process instead.
+            .env("SMOLVM_BOOT_PARENT_PID", std::process::id().to_string())
             // Forkable / fork-clone vars set explicitly on the child (not via
             // inherited process-global env) — see fork_env above.
             .envs(fork_env)
