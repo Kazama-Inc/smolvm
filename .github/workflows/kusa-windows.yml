@@ -1,0 +1,242 @@
+# Kusa fork CI (Windows only for now; macOS and Intel Mac come later).
+#
+# Builds the Go SDK's windows-x64 runtime bundle from source:
+#   smol_go.dll   Kazama-Inc/smol sdk/go/native (checked out into smol/)
+#   smol-vmm.exe  this repository's smolvm binary, renamed
+#   krun.dll      libkrun submodule (Kazama-Inc/libkrun), MSVC
+#   libkrunfw.dll lib/windows-x86_64 (upstream binary, checked against libkrun.provenance)
+#   agent-rootfs.tar, *.ext4 templates   built on Linux by the guest job
+# and runs every test a hosted runner can: libkrun's virtio-fs escape tests and
+# the Go SDK unit tests need no hypervisor. Tests that boot a VM need the
+# Windows Hypervisor Platform; the job probes for it and runs them only where
+# it is there (see the whp-probe step).
+name: kusa-windows
+
+on:
+  push:
+    branches: [kusa]
+    tags: ['kusa-v*']
+  pull_request:
+    branches: [kusa]
+  workflow_dispatch:
+    inputs:
+      smol_ref:
+        description: Kazama-Inc/smol ref to build the Go SDK from
+        default: kusa
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kusa-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SMOL_REPO: Kazama-Inc/smol
+  SMOL_REF: ${{ inputs.smol_ref || 'kusa' }}
+
+jobs:
+  # The guest side is Linux: the agent (static musl), the rootfs it runs in and
+  # the pre-formatted ext4 templates Windows cannot make itself (no mkfs.ext4).
+  guest:
+    name: Guest rootfs (x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          submodules: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: kusa-guest-${{ hashFiles('Cargo.lock') }}
+          restore-keys: kusa-guest-
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools patchelf e2fsprogs
+
+      - name: Build agent
+        run: cargo build --profile release-small -p smolvm-agent --target x86_64-unknown-linux-musl
+
+      - name: Build rootfs
+        run: |
+          AGENT_BINARY=target/x86_64-unknown-linux-musl/release-small/smolvm-agent \
+            ./scripts/build-agent-rootfs.sh --arch x86_64 --no-build-agent
+          sudo tar -cf target/agent-rootfs.tar -C target/agent-rootfs .
+
+      - name: Disk templates
+        run: |
+          make_template() { # path label; 512 MiB, the engine extends each copy
+            dd if=/dev/zero of="$1" bs=1 count=0 seek=$((512 * 1024 * 1024)) 2>/dev/null
+            mkfs.ext4 -F -q -m 0 -L "$2" "$1"
+          }
+          make_template target/storage-template.ext4 smolvm
+          make_template target/overlay-template.ext4 smolvm-overlay
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-x86_64
+          path: |
+            target/agent-rootfs.tar
+            target/storage-template.ext4
+            target/overlay-template.ext4
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x86_64, MSVC)
+    needs: guest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # rust-toolchain.toml says "stable", which on a gnu-default host would
+      # pick the gnu toolchain; always build with MSVC.
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+      # libkrun embeds a static Linux init; link it with the bundled lld.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      CARGO_TARGET_DIR: ${{ github.workspace }}\target
+      BUNDLE_DIR: ${{ github.workspace }}\bundle
+    steps:
+      # Windows runners default to core.autocrlf=true, which would give the
+      # shell scripts CRLF line endings.
+      - run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          submodules: false
+
+      - name: Fetch sources (libkrun submodule, Windows libraries, Go SDK)
+        run: |
+          git submodule update --init --depth 1 libkrun
+          git lfs pull --include "lib/windows-x86_64/*"
+          git clone --depth 1 --branch "$SMOL_REF" "https://github.com/$SMOL_REPO.git" smol
+          echo "smolvm $(git rev-parse --short HEAD), libkrun $(git -C libkrun rev-parse --short HEAD), smol $(git -C smol rev-parse --short HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check libkrunfw.dll provenance
+        run: |
+          # The bundled libkrunfw.dll must be the one built from the pinned
+          # libkrunfw submodule (we do not fork or rebuild libkrunfw).
+          pinned=$(git ls-tree HEAD libkrunfw | awk '{print $3}')
+          recorded=$(sed -n 's/^libkrunfw=//p' lib/windows-x86_64/libkrun.provenance)
+          echo "libkrunfw pinned=$pinned recorded=$recorded"
+          [ "$pinned" = "$recorded" ] || { echo "::error::libkrunfw.dll provenance does not match the submodule"; exit 1; }
+          sha256sum lib/windows-x86_64/libkrunfw.dll
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+          rustup target add x86_64-unknown-linux-musl --toolchain stable-x86_64-pc-windows-msvc
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: smol/sdk/go/go.mod
+          cache-dependency-path: smol/sdk/go/go.sum
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: kusa-windows-${{ hashFiles('Cargo.lock', 'libkrun/Cargo.lock', 'smol/sdk/go/native/Cargo.lock') }}
+          restore-keys: kusa-windows-
+
+      - name: libkrun unit tests (virtio-fs escape set, no hypervisor needed)
+        run: cargo test --manifest-path libkrun/Cargo.toml --release -p krun-devices --features blk,net --lib
+
+      - name: Build krun.dll
+        run: cargo build --manifest-path libkrun/Cargo.toml --release -p libkrun --features blk,net
+
+      - name: Build smol-vmm.exe
+        run: cargo build --release --bin smolvm
+
+      - name: Build smol_go.dll
+        run: cargo build --manifest-path smol/sdk/go/native/Cargo.toml --release
+
+      - name: Go SDK unit tests
+        working-directory: smol/sdk/go
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: guest-x86_64
+          path: guest
+
+      - name: Assemble runtime bundle
+        run: ./scripts/kusa/assemble-windows-bundle.sh
+
+      - name: Sign
+        env:
+          # Not configured yet (no certificate). When it is: a base64 PFX and
+          # its password, plus an RFC 3161 timestamp URL.
+          WINDOWS_SIGNING_PFX: ${{ secrets.WINDOWS_SIGNING_PFX }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        shell: pwsh
+        run: ./scripts/kusa/sign-windows.ps1 -Dir "$env:BUNDLE_DIR"
+
+      - name: Package
+        id: package
+        run: ./scripts/kusa/package-windows-bundle.sh
+
+      - name: Probe the Windows Hypervisor Platform
+        id: whp
+        working-directory: scripts/kusa/whpprobe
+        env:
+          CGO_ENABLED: '0'
+          SMOLMACHINES_RUNTIME_DIR: ${{ env.BUNDLE_DIR }}
+          SMOLMACHINES_NO_DOWNLOAD: '1'
+        run: |
+          go run . | tee probe.json
+          echo "available=$(jq -r .Available probe.json)" >> "$GITHUB_OUTPUT"
+          echo "WHP on this runner: $(jq -c . probe.json)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: VM tests (Windows e2e and mount escape set)
+        if: steps.whp.outputs.available == 'true'
+        working-directory: smol/sdk/go
+        env:
+          CGO_ENABLED: '0'
+          SMOL_E2E: '1'
+          SMOLMACHINES_RUNTIME_DIR: ${{ env.BUNDLE_DIR }}
+          SMOLMACHINES_NO_DOWNLOAD: '1'
+        run: |
+          go run github.com/google/go-containerregistry/cmd/crane@v0.20.2 \
+            pull --platform linux/amd64 alpine:3.20 "$RUNNER_TEMP/alpine-3.20.tar"
+          SMOL_E2E_IMAGE="$(cygpath -w "$RUNNER_TEMP/alpine-3.20.tar")" \
+            go test -count=1 -v -timeout 20m -run 'TestE2EWindows|TestE2EExecControl' .
+
+      - name: No hypervisor here
+        if: steps.whp.outputs.available != 'true'
+        run: echo "::warning::WHP is not available on this runner; VM tests did not run. They need a self-hosted Windows runner (or a larger hosted runner with virtualization)."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smol-go-runtime-windows-x64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
