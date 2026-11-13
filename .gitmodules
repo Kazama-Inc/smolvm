@@ -1,6 +1,7 @@
 [submodule "libkrun"]
 	path = libkrun
-	url = git@github.com:smol-machines/libkrun.git
+	url = https://github.com/Kazama-Inc/libkrun.git
+	branch = kusa
 [submodule "libkrunfw"]
 	path = libkrunfw
 	url = git@github.com:smol-machines/libkrunfw.git
