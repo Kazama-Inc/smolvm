@@ -27,7 +27,24 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | 分支 | 内容 | 上游状态 |
 |---|---|---|
 | `feat/windows-boot-helper` | Windows 上启动辅助程序的父进程看门狗（SDK 嵌入时宿主被杀，虚拟机随之退出，先请 guest 干净关机；原来 Windows 上没有，虚拟机会成孤儿）；`main()` 一开始 `SetDefaultDllDirectories`，不从当前目录和 PATH 加载 DLL | 草稿，未提 |
+| `feat/windows-state-dir` | Windows 上 `SMOLVM_DATA_DIR` 生效（`smolvm_pack::host_dirs`，各 crate 的 `dirs::` 调用都经它）；启动虚拟机前对状态目录做 AF_UNIX 自检（含 108 字节路径上限），失败直接报原因，不再等 40 秒超时 | 草稿，未提 |
 | （子模块） | `libkrun` 指向 `Kazama-Inc/libkrun` 的 `kusa`：Windows virtiofs 的 junction 穿越和「文件名带 `\`、`:` 写出共享目录」两处修复 | 见 libkrun 的 `KUSA.md` |
+
+## Windows 加固（设计 10.5 的 F2）进度
+
+| 项 | 状态 |
+|---|---|
+| junction 穿越（否决级） | 已修（libkrun `fix/windows-virtiofs-escapes`）。同时修了文件名带 `\`、`:` 写出共享目录（同为否决级，原型没发现） |
+| 从源码编 `krun.dll` | 已通（MSVC + musl 目标 + `rust-lld`）。MSVC 版偶发「流式命令 1 秒内没起来」，上游 GNU 版没有，待定是否改用 mingw 交叉编 |
+| 状态目录可配置 + AF_UNIX 自检 | 已做（`feat/windows-state-dir`） |
+| 父进程联动 | 已做（`feat/windows-boot-helper` 的看门狗 + SDK 的作业对象），有 e2e |
+| rootfs 解包不依赖符号链接权限 | 未做 |
+| 开网络时取消要 5 秒 | 未做。线索：取消靠对克隆的 AF_UNIX 句柄 `shutdown(Both)`（`src/embedded/exec.rs`），Windows 上未必及时叫醒阻塞的读；11-14 不开网络时也碰到一次取消卡死 |
+| 内存按上限提交、高段不归还 | 未做 |
+| 非 root 写 `/workspace` | 未做。原因：agent 只在共享根属于非 root 时做 id 映射（`crates/smolvm-agent/src/mount_owner.rs`），而 Windows 服务端把所有文件报成 uid 0；要给每个共享传一个缺省属主（工作区共享报主机用户，guest rootfs 共享仍报 root），涉及 smolvm → libkrun 的接口。先在镜像里用 root 跑 |
+| 非管理员（无开发人员模式）、家庭版、Windows 10 | 需要别的机器 |
+
+上游三个仓库的 CI 都有 `no-ai-attribution` 检查，拒绝带 AI 署名的提交；本 fork 的提交带 `Co-Authored-By` 署名，提给上游前要另行处理。
 
 ## 构建（Windows）
 
@@ -41,4 +58,4 @@ RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc cargo build --release --bin smolv
 
 ## 测试环境的坑
 
-- 从 MSIX 应用（例如 Claude 桌面端）里起的进程继承 AppData 重定向，`%LOCALAPPDATA%\smolvm` 下 AF_UNIX 连不上，表现是「agent did not become ready within 40 seconds」。在普通终端里跑。
+- 从 MSIX 应用（例如 Claude 桌面端）里起的进程继承 AppData 重定向，`%LOCALAPPDATA%\smolvm` 下 AF_UNIX 连不上。设 `SMOLVM_DATA_DIR` 到 AppData 以外的短目录（例如 `%TEMP%` 下）；不设时现在会在启动前直接报错说明。
