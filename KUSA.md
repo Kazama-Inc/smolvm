@@ -14,11 +14,11 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 
 | 分支 | 内容 |
 |---|---|
-| `main` | 跟上游的**发布标签**，不追每个提交。现在 = `v1.34.4`（`ed827014`） |
-| `kusa` | `main` 加下表的补丁、`libkrun` 子模块指向 `Kazama-Inc/libkrun` 的 `kusa`、我们的 CI。每次合上游后重做 |
-| `feat/*`、`fix/*` | 每个补丁一个分支，从 `main` 拉，能单独提给上游 |
+| `main` | GitHub fork 时带过来的上游提交（`eb26336f`），**原样不动、不作基线**：组织规则集管所有仓库的 `main`，禁止强推、只能走 PR 合入，钉不到发布标签 |
+| `kusa` | **发布基线**：上游发布标签（现在 `v1.34.4` = `ed827014`）加下表的补丁、`libkrun` 子模块指向 `Kazama-Inc/libkrun` 的 `kusa`、我们的 CI。每次合上游后重做 |
+| `feat/*`、`fix/*` | 每个补丁一个分支，从基线标签拉（不是从 `main`），能单独提给上游 |
 
-每两周看一次上游的发布说明，有安全修复当周合。升级步骤：`main` 快进到新标签 → 各 `feat/`、`fix/` 分支变基 → 重做 `kusa` → libkrun fork 同样处理（见它的 `KUSA.md`）→ CI 全绿、Windows e2e 和越权集过了再给主仓库换版本。
+每两周看一次上游的发布说明，有安全修复当周合。升级步骤：各 `feat/`、`fix/` 分支变基到新标签 → 从新标签重做 `kusa`（`kusa` 不受规则集限制，可以重写） → libkrun fork 同样处理（见它的 `KUSA.md`）→ CI 全绿、Windows e2e 和越权集过了再给主仓库换版本。
 
 ## 补丁
 
@@ -26,16 +26,16 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 
 | 分支 | 内容 | 上游状态 |
 |---|---|---|
-| `feat/windows-boot-helper` | Windows 上启动辅助程序的父进程看门狗（SDK 嵌入时宿主被杀，虚拟机随之退出，先请 guest 干净关机；原来 Windows 上没有，虚拟机会成孤儿）；`main()` 一开始 `SetDefaultDllDirectories`，不从当前目录和 PATH 加载 DLL | 草稿，未提 |
-| `feat/windows-state-dir` | Windows 上 `SMOLVM_DATA_DIR` 生效（`smolvm_pack::host_dirs`，各 crate 的 `dirs::` 调用都经它）；启动虚拟机前对状态目录做 AF_UNIX 自检（含 108 字节路径上限），失败直接报原因，不再等 40 秒超时 | 草稿，未提 |
+| `feat/windows-boot-helper` | Windows 上启动辅助程序的父进程看门狗（SDK 嵌入时宿主被杀，虚拟机随之退出，先请 guest 干净关机；原来 Windows 上没有，虚拟机会成孤儿）；`main()` 一开始 `SetDefaultDllDirectories`，不从当前目录和 PATH 加载 DLL | 暂不提上游 |
+| `feat/windows-state-dir` | Windows 上 `SMOLVM_DATA_DIR` 生效（`smolvm_pack::host_dirs`，各 crate 的 `dirs::` 调用都经它）；启动虚拟机前对状态目录做 AF_UNIX 自检（含 108 字节路径上限），失败直接报原因，不再等 40 秒超时 | 暂不提上游 |
 | （子模块） | `libkrun` 指向 `Kazama-Inc/libkrun` 的 `kusa`：Windows virtiofs 的 junction 穿越和「文件名带 `\`、`:` 写出共享目录」两处修复 | 见 libkrun 的 `KUSA.md` |
 
 ## Windows 加固（设计 10.5 的 F2）进度
 
 | 项 | 状态 |
 |---|---|
-| junction 穿越（否决级） | 已修（libkrun `fix/windows-virtiofs-escapes`）。同时修了文件名带 `\`、`:` 写出共享目录（同为否决级，原型没发现） |
-| 从源码编 `krun.dll` | 已通（MSVC + musl 目标 + `rust-lld`）。MSVC 版偶发「流式命令 1 秒内没起来」，上游 GNU 版没有，待定是否改用 mingw 交叉编 |
+| junction 穿越（否决级） | 已修（libkrun `fix/windows-virtiofs-escapes`）。同时修了文件名带 `\`、`:` 写出共享目录（同为否决级，原型没发现）。按上游 `SECURITY.md` 走 GitHub 私密漏洞报告，报告待发 |
+| 从源码编 `krun.dll` | 已通（MSVC + musl 目标 + `rust-lld`）。定用 MSVC（11-14 用户确认）。已知 MSVC 版偶发「流式命令 1 秒内没起来」，上游 GNU 版没有，原因未查清 |
 | 状态目录可配置 + AF_UNIX 自检 | 已做（`feat/windows-state-dir`） |
 | 父进程联动 | 已做（`feat/windows-boot-helper` 的看门狗 + SDK 的作业对象），有 e2e |
 | rootfs 解包不依赖符号链接权限 | 未做 |
@@ -44,7 +44,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | 非 root 写 `/workspace` | 未做。原因：agent 只在共享根属于非 root 时做 id 映射（`crates/smolvm-agent/src/mount_owner.rs`），而 Windows 服务端把所有文件报成 uid 0；要给每个共享传一个缺省属主（工作区共享报主机用户，guest rootfs 共享仍报 root），涉及 smolvm → libkrun 的接口。先在镜像里用 root 跑 |
 | 非管理员（无开发人员模式）、家庭版、Windows 10 | 需要别的机器 |
 
-上游三个仓库的 CI 都有 `no-ai-attribution` 检查，拒绝带 AI 署名的提交；本 fork 的提交带 `Co-Authored-By` 署名，提给上游前要另行处理。
+补丁暂不提上游（11-14 用户决定）。上游三个仓库的 CI 都有 `no-ai-attribution` 检查，拒绝带 AI 署名的提交；本 fork 的提交带 `Co-Authored-By` 署名，将来要提时另行处理。
 
 ## 构建（Windows）
 
