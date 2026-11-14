@@ -1371,6 +1371,36 @@ fn safe_unpack_skipping<R: Read>(
                 ));
             }
             set_owner(&full_path, host_uid, host_gid);
+        } else if cfg!(windows) && entry_type == tar::EntryType::Symlink {
+            // A native NTFS symlink needs Developer Mode or elevation (the tar
+            // crate's unpack fails, or is skipped as a platform quirk below,
+            // leaving the image without the link). Store it as an LX symlink,
+            // which needs neither and which libkrun's Windows server presents
+            // as a symlink. Its target was checked against `dest` above.
+            #[cfg(windows)]
+            {
+                verify_parent_within_dest(&full_path, &real_dest)?;
+                let target = entry.link_name_bytes().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("symlink '{}' has no target", entry_path.display()),
+                    )
+                })?;
+                if let Some(parent) = full_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                match fs::symlink_metadata(&full_path) {
+                    Ok(meta) if meta.is_dir() => fs::remove_dir(&full_path)?,
+                    Ok(_) => fs::remove_file(&full_path)?,
+                    Err(_) => {}
+                }
+                crate::lx_symlink::create(&full_path, &target).map_err(|e| {
+                    std::io::Error::new(
+                        e.kind(),
+                        format!("failed to unpack '{}': {}", entry_path.display(), e),
+                    )
+                })?;
+            }
         } else {
             if let Err(e) = entry.unpack_in(dest) {
                 // On macOS, certain entries fail to unpack due to platform

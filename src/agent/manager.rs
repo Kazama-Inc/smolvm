@@ -2026,6 +2026,8 @@ impl AgentManager {
     /// checked with `symlink_metadata`, not `exists`, because it is a symlink to
     /// a guest-only path that would not resolve on the host: the same rule
     /// [`Self::resolve_rootfs_path`] applies, so the two can never disagree.
+    // Windows unpacks with `extract_rootfs_lx` instead; kept for the tests.
+    #[cfg_attr(windows, allow(dead_code))]
     fn accept_extraction(staged: &Path, status: std::process::ExitStatus) -> Result<()> {
         if std::fs::symlink_metadata(staged.join("sbin/init")).is_ok() {
             return Ok(());
@@ -2073,37 +2075,58 @@ impl AgentManager {
         std::fs::create_dir_all(&tmp)
             .map_err(|e| Error::storage("create rootfs staging", e.to_string()))?;
 
-        // Use the system `tar` — it preserves symlinks (e.g. /sbin/init) and modes
-        // (the executable agent), which the tar crate handling here would not need
-        // to reimplement. Extraction runs on the host before VM boot (unsandboxed).
-        let status = if tar.extension().is_some_and(|ext| ext == "zst") {
-            Self::extract_zstd_tar(tar, &tmp)
-        } else {
-            std::process::Command::new("tar")
-                .arg("-xpf")
-                .arg(tar)
-                .arg("-C")
-                .arg(&tmp)
-                .status()
-                .map_err(|e| Error::storage("extract rootfs tar", e.to_string()))
-        };
-        let status = match status {
-            Ok(status) => status,
-            Err(e) => {
+        // Windows unpacks in-process, symlinks as LX symlinks: the system tar
+        // makes native NTFS symlinks, which need Developer Mode or elevation,
+        // and without them the rootfs came out with no links at all.
+        #[cfg(windows)]
+        {
+            if let Err(e) = Self::extract_rootfs_lx(tar, &tmp) {
                 let _ = std::fs::remove_dir_all(&tmp);
                 return Err(e);
             }
-        };
-        // tar's exit status cannot decide this on its own: a healthy Windows
-        // extraction also exits non-zero, on the extended-attribute warning.
-        if let Err(e) = Self::accept_extraction(&tmp, status) {
-            let _ = std::fs::remove_dir_all(&tmp);
-            return Err(e);
+            if std::fs::symlink_metadata(tmp.join("sbin/init")).is_err() {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(Error::storage(
+                    "extract rootfs tar",
+                    format!("{} has no sbin/init", tar.display()),
+                ));
+            }
         }
-        if !status.success() {
-            tracing::warn!(
-                "rootfs tar extraction exited with {status} but sbin/init landed; continuing"
-            );
+        // Elsewhere the system `tar` — it preserves symlinks (e.g. /sbin/init)
+        // and modes (the executable agent), which the tar crate handling here
+        // would not need to reimplement. Extraction runs on the host before VM
+        // boot (unsandboxed).
+        #[cfg(not(windows))]
+        {
+            let status = if tar.extension().is_some_and(|ext| ext == "zst") {
+                Self::extract_zstd_tar(tar, &tmp)
+            } else {
+                std::process::Command::new("tar")
+                    .arg("-xpf")
+                    .arg(tar)
+                    .arg("-C")
+                    .arg(&tmp)
+                    .status()
+                    .map_err(|e| Error::storage("extract rootfs tar", e.to_string()))
+            };
+            let status = match status {
+                Ok(status) => status,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(e);
+                }
+            };
+            // tar's exit status cannot decide this on its own: a healthy Windows
+            // extraction also exits non-zero, on the extended-attribute warning.
+            if let Err(e) = Self::accept_extraction(&tmp, status) {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(e);
+            }
+            if !status.success() {
+                tracing::warn!(
+                    "rootfs tar extraction exited with {status} but sbin/init landed; continuing"
+                );
+            }
         }
         let _ = std::fs::write(tmp.join(".extracted"), b"");
         // Atomic publish; if another process won the race, just use theirs.
@@ -2120,9 +2143,30 @@ impl AgentManager {
         Ok(dest)
     }
 
+    /// Windows: unpack a rootfs tarball (`.tar`, `.tar.gz` or `.tar.zst`) into
+    /// `dest` in-process, its symlinks as LX symlinks, which need no privilege
+    /// (see [`smolvm_pack::lx_symlink`]).
+    #[cfg(windows)]
+    fn extract_rootfs_lx(tar: &Path, dest: &Path) -> Result<()> {
+        let fail = |e: std::io::Error| Error::storage("extract rootfs tar", e.to_string());
+        let file = std::io::BufReader::new(std::fs::File::open(tar).map_err(fail)?);
+        let name = tar.to_string_lossy();
+        if name.ends_with(".zst") {
+            let decoder = zstd::stream::read::Decoder::new(file).map_err(fail)?;
+            smolvm_pack::lx_symlink::unpack_rootfs(decoder, dest)
+        } else if name.ends_with(".gz") {
+            smolvm_pack::lx_symlink::unpack_rootfs(flate2::read::GzDecoder::new(file), dest)
+        } else {
+            smolvm_pack::lx_symlink::unpack_rootfs(file, dest)
+        }
+        .map_err(fail)
+    }
+
     /// Extract a zstd-compressed rootfs tarball into `dest`: decompressed here
     /// and streamed into the system `tar`, which then needs no `zstd` program
     /// of its own (GNU tar shells out to one for `.zst`, and hosts often lack it).
+    // Windows unpacks with `extract_rootfs_lx` instead; kept for the tests.
+    #[cfg_attr(windows, allow(dead_code))]
     fn extract_zstd_tar(tar: &Path, dest: &Path) -> Result<std::process::ExitStatus> {
         let fail = |e: std::io::Error| Error::storage("extract rootfs tar", e.to_string());
         let mut decoder = zstd::stream::read::Decoder::new(std::fs::File::open(tar).map_err(fail)?)
