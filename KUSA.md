@@ -54,7 +54,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc cargo build --release --bin smolvm   # -> smolvm.exe，打包时改名 smol-vmm.exe
 ```
 
-运行时包的组成和 CI 见 `.github/workflows/kusa-windows.yml`。
+运行时包的组成和 CI 见 `.github/workflows/kusa-windows.yml`。GitHub 托管的 `windows-latest` runner 有 WHP（嵌套虚拟化；11-14 run 43544630569 实测 `Available: true`），Windows e2e 和越权集在 CI 上真起虚拟机跑；工作流仍先探测，没有时只出警告。
 
 ## 测试环境的坑
 
