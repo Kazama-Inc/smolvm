@@ -30,6 +30,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | `feat/windows-state-dir` | Windows 上 `SMOLVM_DATA_DIR` 生效（`smolvm_pack::host_dirs`，各 crate 的 `dirs::` 调用都经它）；启动虚拟机前对状态目录做 AF_UNIX 自检（含 108 字节路径上限），失败直接报原因，不再等 40 秒超时 | 暂不提上游 |
 | `feat/windows-share-host-owner` | Windows 上用户共享带 `KRUN_VIRTIOFS_FLAG_HOST_OWNER`，主机文件报 uid 1000，agent 的 id 映射（`mount_owner`）把它映射给工作负载用户；libkrun 不认这个 flag 时照旧挂载 | 暂不提上游 |
 | `feat/windows-rootfs-lx-symlinks` | Windows 上 agent rootfs 和镜像层的符号链接存成 WSL 式 LX 链接（`smolvm_pack::lx_symlink`），不再需要开发人员模式或管理员；rootfs 改在进程内解包（不用系统 `tar`）；摘要、rootfs 仓库拷贝、checkpoint 解包、pack 打包都能读写 LX 链接 | 暂不提上游 |
+| `fix/windows-disk-templates` | Windows 上只在模板的文件系统正好等于磁盘大小时才用存储盘、overlay 盘模板，别的大小照旧留空白盘由 guest 格式化：主机没有 `resize2fs` 缩不了，guest 离线扩一个从没挂载过的小模板要写全部新 inode 表，512 MiB 扩到 20 GiB 让启动慢 6.6 秒。`.zst` 模板稀疏解压时判断全零改成按 4 KiB 块折叠（可向量化），30 GiB 逻辑大小的模板首次解压从约 6 秒降到约 1 秒 | 暂不提上游 |
 | （子模块） | `libkrun` 指向 `Kazama-Inc/libkrun` 的 `kusa`：Windows virtiofs 的 junction 穿越和「文件名带 `\`、`:` 写出共享目录」两处修复 | 见 libkrun 的 `KUSA.md` |
 
 ## Windows 加固（设计 10.5 的 F2）进度
@@ -44,7 +45,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | 取消要 5 秒 | 已修（libkrun `fix/vsock-unix-prompt-close`）。原因：Windows 上宿主对自己的 AF_UNIX 句柄 `shutdown` 叫不醒同一 socket 上阻塞的 `recv`，只能等 libkrun 关主机侧 socket，而 unix 代理要等 reaper 的 5 秒宽限期才关。现在 guest 一关连接就 `shutdown` 主机侧 socket。实测（MSVC，开不开网络一样）：取消 2～14 ms 返回，下一条命令约 10 ms；`ExecOptions.Timeout` 2 秒准时返回 124，原型记录的「晚 1～3 秒」也没了 |
 | 内存按上限提交、高段不归还 | 已做（libkrun `feat/whp-lazy-guest-ram`，默认开，`SMOLVM_WHP_LAZY_RAM=0` 关）。本机实测 2 GiB 档：开机后私有提交 194 MB（原来 2127 MB，即上限加 80 MB）；guest 填 1.2 GB 后 1210 MB；释放后回落到 257～758 MB（看 balloon 回收进度；原来一直 2133 MB 不降）。首次填 1 GB 用 0.28 秒（原来 0.21 秒；如果不预填、只按 64 KiB 提交，要 4.4 秒）。压力测试（填满、释放、马上做大量 virtio-fs 读和 vsock 输出，4 轮）每轮校验都一致；Windows e2e 全过。设计 10.4 里「Windows 在 F2 修好内存之前封顶 3 GiB」这一条可以重新评估 |
 | 建机偶发卡住 | 已修（libkrun `fix/vsock-rx-backlog`，11-14）。原因有两层。一是 Windows 上 `peer_hung_up` 写死返回 `false`，主机在 guest 还没监听时放弃的每个探测连接，libkrun 都会替它一直重发连接请求，每次启动产生三万多个包，挤满 vsock RX 队列。二是溢出时 rxq 满 256 个就丢包、调用方不检查，偶尔丢掉某条在用连接的控制包，这条连接就永久卡住：guest agent 已经起来，VMM CPU 为 0，主机一直等不到回应。修后压力配置 10 次没再卡住（修前同一个脚本第 2 次就卡）。副作用是启动快了：guest agent 开机后 232 ms 就开始运行（原来 3310 ms），建机 1.3～1.9 秒（原来 5.2～5.9 秒），Windows e2e 全套 32 秒（原来约 65 秒） |
-| SDK 启动没用上存储盘模板（待查） | 通过 Go SDK 建机时，每次都是空白的 `storage.raw`，guest 当场格式化（现在约 300 ms）。`find_existing_template` 只在 `~/.smolvm` 和可执行文件所在目录找模板，而运行时包里的 `storage-template.ext4` 在 `SMOLMACHINES_RUNTIME_DIR` 下 |
+| SDK 建机没用上磁盘模板 | 已修（11-14）。三处：smol `fix/go-sdk-runtime-templates` 把运行时目录登记为模板查找目录（原来只找 `~/.smolvm` 和宿主可执行文件旁边）；CI 的模板改为默认大小（存储 20 GiB、overlay 10 GiB，惰性初始化 inode 表和日志，每个只有约 5 MiB 数据），以 `.zst` 进运行时包，引擎首次使用时稀疏解压到包旁边或缓存目录；本仓库 `fix/windows-disk-templates`（见上）。原来的 512 MiB 模板在 Windows 上反而让建机慢到 8～10 秒（guest 离线扩容）。修后本机建机 0.71～0.90 秒（修前 1.07～1.42 秒），guest 的 `rootfs_done` 230 ms（修前 390 ms，当场格式化 overlay 盘）；首次使用多一次约 1 秒的解压 |
 | 非 root 写 `/workspace` | 已修（smolvm `feat/windows-share-host-owner` + libkrun `feat/windows-virtiofs-host-owner`）。工作区共享报 uid/gid 1000；uid 1000 的工作负载直接能写，别的非 root 用户靠 agent 建容器时的 id 映射（按 `MachineConfig.User` 或镜像的 `USER`；单条命令的 `ExecOptions.User` 不映射，与上游在 macOS 上的行为相同）。e2e：smol `feat/windows-workspace-owner-test`，修前两种情况都 Permission denied |
 | 非管理员（无开发人员模式）、家庭版、Windows 10 | 需要别的机器 |
 
@@ -59,6 +60,8 @@ RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc cargo build --release --bin smolv
 ```
 
 运行时包的组成和 CI 见 `.github/workflows/kusa-windows.yml`。GitHub 托管的 `windows-latest` runner 有 WHP（嵌套虚拟化；11-14 run 43544630569 实测 `Available: true`），Windows e2e 和越权集在 CI 上真起虚拟机跑；工作流仍先探测，没有时只出警告。
+
+磁盘模板（`storage-template.ext4.zst`、`overlay-template.ext4.zst`）由 guest 作业在 Linux 上做，大小必须等于 `src/data/storage.rs` 的 `DEFAULT_STORAGE_SIZE_GIB`、`DEFAULT_OVERLAY_SIZE_GIB`，否则 Windows 上用不上（见 `fix/windows-disk-templates`）。
 
 ## 测试环境的坑
 
