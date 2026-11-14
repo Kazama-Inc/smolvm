@@ -14,6 +14,8 @@ pub mod checkpoint_stream;
 pub mod detect;
 pub mod extract;
 pub mod format;
+#[cfg(windows)]
+pub mod lx_symlink;
 #[cfg(target_os = "macos")]
 pub mod macho;
 pub mod packer;

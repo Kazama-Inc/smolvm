@@ -147,6 +147,9 @@ windows-sys = { version = "0.60", features = [
     "Win32_Networking_WinSock",
     "Win32_NetworkManagement_IpHelper",
 ] }
+# The bundled agent rootfs may be a .tar.gz; Windows unpacks it in-process
+# (smolvm_pack::lx_symlink) instead of with the system tar.
+flate2 = "1"
 
 [dev-dependencies]
 tempfile = "3"
