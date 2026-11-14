@@ -21,6 +21,60 @@ pub const KRUN_VIRTIOFS_FLAG_LIVE: u32 = 1 << 1;
 /// the guest's entry when the host creates the name (see libkrun's
 /// `KRUN_VIRTIOFS_FLAG_NEGATIVE_ENTRIES`).
 pub const KRUN_VIRTIOFS_FLAG_NEGATIVE_ENTRIES: u32 = 1 << 2;
+/// `krun_add_virtiofs4` flag: on Windows, a host file with no owner recorded
+/// by the guest is reported as uid and gid 1000 instead of root. A Windows
+/// host has no Unix owner to report, so a share otherwise reaches the guest as
+/// root:root and a non-root workload cannot write to it; with a non-root owner
+/// the agent maps the share onto the workload user (`mount_owner`), as it does
+/// for a macOS or Linux host user. Only for shares of user files (see
+/// libkrun's `KRUN_VIRTIOFS_FLAG_HOST_OWNER`; other platforms ignore it).
+pub const KRUN_VIRTIOFS_FLAG_HOST_OWNER: u32 = 1 << 3;
+
+/// The `krun_add_virtiofs4` flags for a share of user files.
+pub fn user_share_flags(negative_entries: bool) -> u32 {
+    let mut flags = 0;
+    if negative_entries {
+        flags |= KRUN_VIRTIOFS_FLAG_NEGATIVE_ENTRIES;
+    }
+    if cfg!(target_os = "windows") {
+        flags |= KRUN_VIRTIOFS_FLAG_HOST_OWNER;
+    }
+    flags
+}
+
+/// `krun_add_virtiofs4` that drops `KRUN_VIRTIOFS_FLAG_HOST_OWNER` when this
+/// libkrun does not know it (EINVAL), keeping the other flags. Still EINVAL
+/// when nothing else is left to ask for, so the caller attaches the share the
+/// old way.
+///
+/// # Safety
+/// As for `krun_add_virtiofs4`: a valid context and C strings.
+pub unsafe fn add_virtiofs4_dropping_unknown(
+    add_virtiofs4: unsafe extern "C" fn(
+        u32,
+        *const libc::c_char,
+        *const libc::c_char,
+        u64,
+        bool,
+        u32,
+    ) -> i32,
+    ctx: u32,
+    tag: *const libc::c_char,
+    path: *const libc::c_char,
+    dax_window: u64,
+    read_only: bool,
+    flags: u32,
+) -> i32 {
+    let ret = unsafe { add_virtiofs4(ctx, tag, path, dax_window, read_only, flags) };
+    let rest = flags & !KRUN_VIRTIOFS_FLAG_HOST_OWNER;
+    if ret == -libc::EINVAL && rest != flags && rest != 0 {
+        tracing::warn!(
+            "libkrun does not know KRUN_VIRTIOFS_FLAG_HOST_OWNER; the share stays root-owned"
+        );
+        return unsafe { add_virtiofs4(ctx, tag, path, dax_window, read_only, rest) };
+    }
+    ret
+}
 
 /// Whether the libkrun this binary would load can serve host-extracted image
 /// layers with their recorded ownership: on macOS and Windows the server

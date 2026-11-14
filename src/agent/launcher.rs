@@ -2164,14 +2164,18 @@ pub fn launch_agent_vm(config: &LaunchConfig<'_>) -> Result<()> {
             // paths below.
             let mut attached = false;
             let negative_entries = !mount.staged && super::fsnotify_watch::watching_enabled();
-            if let (true, Some(add_virtiofs4)) = (negative_entries, krun.add_virtiofs4) {
-                let ret = add_virtiofs4(
+            // On Windows every user share also asks for a non-root owner, so
+            // a non-root workload can write to it (`user_share_flags`).
+            let flags = super::krun::user_share_flags(negative_entries);
+            if let (true, Some(add_virtiofs4)) = (flags != 0, krun.add_virtiofs4) {
+                let ret = super::krun::add_virtiofs4_dropping_unknown(
+                    add_virtiofs4,
                     ctx,
                     tag.as_ptr(),
                     host_path.as_ptr(),
                     dax_window,
                     mount.read_only,
-                    super::krun::KRUN_VIRTIOFS_FLAG_NEGATIVE_ENTRIES,
+                    flags,
                 );
                 if ret >= 0 {
                     attached = true;
