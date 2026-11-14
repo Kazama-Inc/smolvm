@@ -6987,6 +6987,48 @@ mod tests {
         assert_ne!(ownership_loss_wording(true), ownership_loss_wording(false));
     }
 
+    /// Windows: an image layer's symlinks unpack as LX symlinks, so neither
+    /// Developer Mode nor elevation is needed, and an escaping one is still
+    /// refused.
+    #[cfg(windows)]
+    #[test]
+    fn windows_layer_symlinks_unpack_as_lx_symlinks() {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut file = tar::Header::new_gnu();
+        file.set_entry_type(tar::EntryType::Regular);
+        file.set_size(2);
+        file.set_mode(0o755);
+        builder.append_data(&mut file, "usr/bin/busybox", &b"bb"[..]).unwrap();
+        for (name, target) in [("bin/sh", "/usr/bin/busybox"), ("usr/bin/ash", "busybox")] {
+            let mut link = tar::Header::new_gnu();
+            link.set_entry_type(tar::EntryType::Symlink);
+            link.set_size(0);
+            link.set_mode(0o777);
+            builder.append_link(&mut link, name, target).unwrap();
+        }
+        let data = builder.into_inner().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        safe_unpack(&mut tar::Archive::new(&data[..]), dest.path()).unwrap();
+        assert_eq!(
+            crate::lx_symlink::read(&dest.path().join("bin/sh")).unwrap(),
+            b"/usr/bin/busybox"
+        );
+        assert_eq!(
+            crate::lx_symlink::read(&dest.path().join("usr/bin/ash")).unwrap(),
+            b"busybox"
+        );
+
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Symlink);
+        link.set_size(0);
+        link.set_mode(0o777);
+        builder.append_link(&mut link, "x", "../../outside").unwrap();
+        let data = builder.into_inner().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        assert!(safe_unpack(&mut tar::Archive::new(&data[..]), dest.path()).is_err());
+    }
+
     /// Build a tar archive carrying a single symlink entry whose link target
     /// is `link_target`, plus (optionally) a trailing regular-file entry.
     #[cfg(unix)]
