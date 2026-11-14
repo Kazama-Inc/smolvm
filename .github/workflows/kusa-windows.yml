@@ -5,7 +5,7 @@
 #   smol-vmm.exe  this repository's smolvm binary, renamed
 #   krun.dll      libkrun submodule (Kazama-Inc/libkrun), MSVC
 #   libkrunfw.dll lib/windows-x86_64 (upstream binary, checked against libkrun.provenance)
-#   agent-rootfs.tar, *.ext4 templates   built on Linux by the guest job
+#   agent-rootfs.tar, *.ext4.zst templates   built on Linux by the guest job
 # and runs every test a hosted runner can: libkrun's virtio-fs escape tests and
 # the Go SDK unit tests need no hypervisor. Tests that boot a VM need the
 # Windows Hypervisor Platform; the job probes for it and runs them only where
@@ -83,20 +83,29 @@ jobs:
 
       - name: Disk templates
         run: |
-          make_template() { # path label; 512 MiB, the engine extends each copy
-            dd if=/dev/zero of="$1" bs=1 count=0 seek=$((512 * 1024 * 1024)) 2>/dev/null
-            mkfs.ext4 -F -q -m 0 -L "$2" "$1"
+          # Each template is made at its disk's default size (DEFAULT_STORAGE_SIZE_GIB
+          # and DEFAULT_OVERLAY_SIZE_GIB in src/data/storage.rs). On Windows the
+          # engine uses a template only when it already spans the disk: growing a
+          # small one is an offline resize2fs in the guest that delays boot by
+          # seconds. Lazy inode-table and journal init keep each file to ~5 MiB of
+          # data, and zstd keeps the bundle small; the engine expands the .zst
+          # into a sparse file once, beside the bundle or in the user cache.
+          make_template() { # path label GiB
+            truncate -s "$3G" "$1"
+            mkfs.ext4 -F -q -m 0 -E lazy_itable_init=1,lazy_journal_init=1 -L "$2" "$1"
+            zstd -q -19 -T0 --rm "$1"
           }
-          make_template target/storage-template.ext4 smolvm
-          make_template target/overlay-template.ext4 smolvm-overlay
+          make_template target/storage-template.ext4 smolvm 20
+          make_template target/overlay-template.ext4 smolvm-overlay 10
+          ls -l target/*-template.ext4.zst
 
       - uses: actions/upload-artifact@v4
         with:
           name: guest-x86_64
           path: |
             target/agent-rootfs.tar
-            target/storage-template.ext4
-            target/overlay-template.ext4
+            target/storage-template.ext4.zst
+            target/overlay-template.ext4.zst
           if-no-files-found: error
 
   windows:

@@ -4,7 +4,7 @@
 #
 #   smol_go.dll, smol-vmm.exe, krun.dll  $CARGO_TARGET_DIR/release
 #   libkrunfw.dll                        lib/windows-x86_64 (upstream binary)
-#   agent-rootfs.tar, *-template.ext4    guest/ (the guest job's artifact)
+#   agent-rootfs.tar, *-template.ext4.zst  guest/ (the guest job's artifact)
 #
 # The SDK finds the boot helper as smol-vmm.exe beside smol_go.dll; it is the
 # smolvm binary renamed, as in the upstream npm and zip distributions.
@@ -21,7 +21,7 @@ install -m 0755 "$REL/smolvm.exe" "$BUNDLE_DIR/smol-vmm.exe"
 install -m 0755 "$REL/krun.dll" "$BUNDLE_DIR/krun.dll"
 install -m 0755 lib/windows-x86_64/libkrunfw.dll "$BUNDLE_DIR/libkrunfw.dll"
 install -m 0644 "$GUEST/agent-rootfs.tar" "$BUNDLE_DIR/agent-rootfs.tar"
-install -m 0644 "$GUEST/storage-template.ext4" "$GUEST/overlay-template.ext4" "$BUNDLE_DIR/"
+install -m 0644 "$GUEST/storage-template.ext4.zst" "$GUEST/overlay-template.ext4.zst" "$BUNDLE_DIR/"
 
 # What went in, for the bundle's own record and the workflow summary.
 {
