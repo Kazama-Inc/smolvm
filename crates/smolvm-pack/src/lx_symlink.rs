@@ -196,6 +196,36 @@ pub fn unpack_rootfs<R: Read>(reader: R, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Append `path` (a file, a directory tree or a symlink) to `builder` as
+/// `name`, keeping symlinks as symlinks: LX symlinks, which the tar crate
+/// cannot read, as well as native ones. Directory entries go in sorted order,
+/// so the archive is reproducible.
+pub fn append_tree<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
+    name: &Path,
+    path: &Path,
+) -> io::Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        let target = crate::link_target(path)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        builder.append_link(&mut header, name, target)
+    } else if meta.is_dir() {
+        builder.append_dir(name, path)?;
+        let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?.collect::<io::Result<_>>()?;
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            append_tree(builder, &name.join(entry.file_name()), &entry.path())?;
+        }
+        Ok(())
+    } else {
+        builder.append_path_with_name(path, name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +296,34 @@ mod tests {
         assert!(below_root(Path::new("/x")).is_err());
         assert!(below_root(Path::new("C:x")).is_err());
         assert_eq!(below_root(Path::new("./")).unwrap(), None);
+    }
+
+    #[test]
+    fn a_tree_with_lx_symlinks_archives_and_unpacks_again() {
+        let src = tempfile::tempdir().unwrap();
+        fs::create_dir_all(src.path().join("usr/bin")).unwrap();
+        fs::write(src.path().join("usr/bin/busybox"), b"bb").unwrap();
+        fs::create_dir_all(src.path().join("bin")).unwrap();
+        create(&src.path().join("bin/sh"), b"/usr/bin/busybox").unwrap();
+
+        let mut builder = tar::Builder::new(Vec::new());
+        for top in ["bin", "usr"] {
+            append_tree(&mut builder, Path::new(top), &src.path().join(top)).unwrap();
+        }
+        let data = builder.into_inner().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        unpack_rootfs(&data[..], dest.path()).unwrap();
+        assert_eq!(
+            read(&dest.path().join("bin/sh")).unwrap(),
+            b"/usr/bin/busybox"
+        );
+        assert_eq!(
+            fs::read(dest.path().join("usr/bin/busybox")).unwrap(),
+            b"bb"
+        );
+        assert_eq!(
+            crate::link_target(&dest.path().join("bin/sh")).unwrap(),
+            "/usr/bin/busybox"
+        );
     }
 }

@@ -378,7 +378,7 @@ fn rootfs_digest(rootfs_dir: &Path, symlink_own_mode: bool) -> std::io::Result<S
             let _ = symlink_own_mode;
             if kind.is_symlink() {
                 hash.update(b"l");
-                hash.update(fs::read_link(&path)?.to_string_lossy().as_bytes());
+                hash.update(crate::link_target(&path)?.as_bytes());
             } else if kind.is_dir() {
                 hash.update(b"d");
                 walk(&path, &relative, false, symlink_own_mode, hash)?;
@@ -486,7 +486,7 @@ fn rootfs_metadata_hash(rootfs_dir: &Path) -> Option<String> {
                 }
             }
             if metadata.file_type().is_symlink() {
-                hash.update(fs::read_link(&path)?.to_string_lossy().as_bytes());
+                hash.update(crate::link_target(&path)?.as_bytes());
             } else if metadata.is_dir() {
                 walk(&path, &relative, false, hash)?;
             }
@@ -982,6 +982,12 @@ impl AssetCollector {
             }
             let path = entry.path();
             let tar_err = |e: std::io::Error| PackError::Tar(format!("{}: {e}", path.display()));
+            // Windows: the rootfs keeps its links as LX symlinks, which the tar
+            // crate cannot read.
+            #[cfg(windows)]
+            crate::lx_symlink::append_tree(&mut tar_builder, Path::new(&name), &path)
+                .map_err(tar_err)?;
+            #[cfg(not(windows))]
             if entry.file_type()?.is_dir() {
                 tar_builder.append_dir_all(&name, &path).map_err(tar_err)?;
             } else {
