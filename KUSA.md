@@ -29,6 +29,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | `feat/windows-boot-helper` | Windows 上启动辅助程序的父进程看门狗（SDK 嵌入时宿主被杀，虚拟机随之退出，先请 guest 干净关机；原来 Windows 上没有，虚拟机会成孤儿）；`main()` 一开始 `SetDefaultDllDirectories`，不从当前目录和 PATH 加载 DLL | 暂不提上游 |
 | `feat/windows-state-dir` | Windows 上 `SMOLVM_DATA_DIR` 生效（`smolvm_pack::host_dirs`，各 crate 的 `dirs::` 调用都经它）；启动虚拟机前对状态目录做 AF_UNIX 自检（含 108 字节路径上限），失败直接报原因，不再等 40 秒超时 | 暂不提上游 |
 | `feat/windows-share-host-owner` | Windows 上用户共享带 `KRUN_VIRTIOFS_FLAG_HOST_OWNER`，主机文件报 uid 1000，agent 的 id 映射（`mount_owner`）把它映射给工作负载用户；libkrun 不认这个 flag 时照旧挂载 | 暂不提上游 |
+| `feat/windows-rootfs-lx-symlinks` | Windows 上 agent rootfs 和镜像层的符号链接存成 WSL 式 LX 链接（`smolvm_pack::lx_symlink`），不再需要开发人员模式或管理员；rootfs 改在进程内解包（不用系统 `tar`）；摘要、rootfs 仓库拷贝、checkpoint 解包、pack 打包都能读写 LX 链接 | 暂不提上游 |
 | （子模块） | `libkrun` 指向 `Kazama-Inc/libkrun` 的 `kusa`：Windows virtiofs 的 junction 穿越和「文件名带 `\`、`:` 写出共享目录」两处修复 | 见 libkrun 的 `KUSA.md` |
 
 ## Windows 加固（设计 10.5 的 F2）进度
@@ -39,7 +40,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | 从源码编 `krun.dll` | 已通（MSVC + musl 目标 + `rust-lld`）。定用 MSVC（11-14 用户确认）。原以为 MSVC 版偶发「流式命令 1 秒内没起来」，查明是测试的心跳只精确到秒（smol `fix/e2e-heartbeat-counter`），GNU 版同样会挂，与编法无关 |
 | 状态目录可配置 + AF_UNIX 自检 | 已做（`feat/windows-state-dir`） |
 | 父进程联动 | 已做（`feat/windows-boot-helper` 的看门狗 + SDK 的作业对象），有 e2e |
-| rootfs 解包不依赖符号链接权限 | 未做 |
+| rootfs 解包不依赖符号链接权限 | 已修（`feat/windows-rootfs-lx-symlinks`）。链接存成 LX 重解析点：不要特权，目标原样保存（`/usr/bin/x` 不会变成 `C:\usr\bin\x`），Windows 程序不跟，libkrun 按符号链接呈现给 guest。本机实测：重新解包的 rootfs 383 个链接全是 LX，Windows e2e 全过。本机开着开发人员模式，「没开开发人员模式」的整机验证仍要另一台机器；新代码路径不再调用原生符号链接 API |
 | 取消要 5 秒 | 已修（libkrun `fix/vsock-unix-prompt-close`）。原因：Windows 上宿主对自己的 AF_UNIX 句柄 `shutdown` 叫不醒同一 socket 上阻塞的 `recv`，只能等 libkrun 关主机侧 socket，而 unix 代理要等 reaper 的 5 秒宽限期才关。现在 guest 一关连接就 `shutdown` 主机侧 socket。实测（MSVC，开不开网络一样）：取消 2～14 ms 返回，下一条命令约 10 ms；`ExecOptions.Timeout` 2 秒准时返回 124，原型记录的「晚 1～3 秒」也没了 |
 | 内存按上限提交、高段不归还 | 未做 |
 | 非 root 写 `/workspace` | 已修（smolvm `feat/windows-share-host-owner` + libkrun `feat/windows-virtiofs-host-owner`）。工作区共享报 uid/gid 1000；uid 1000 的工作负载直接能写，别的非 root 用户靠 agent 建容器时的 id 映射（按 `MachineConfig.User` 或镜像的 `USER`；单条命令的 `ExecOptions.User` 不映射，与上游在 macOS 上的行为相同）。e2e：smol `feat/windows-workspace-owner-test`，修前两种情况都 Permission denied |
