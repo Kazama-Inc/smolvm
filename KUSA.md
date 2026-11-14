@@ -42,7 +42,8 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | 父进程联动 | 已做（`feat/windows-boot-helper` 的看门狗 + SDK 的作业对象），有 e2e |
 | rootfs 解包不依赖符号链接权限 | 已修（`feat/windows-rootfs-lx-symlinks`）。链接存成 LX 重解析点：不要特权，目标原样保存（`/usr/bin/x` 不会变成 `C:\usr\bin\x`），Windows 程序不跟，libkrun 按符号链接呈现给 guest。本机实测：重新解包的 rootfs 383 个链接全是 LX，Windows e2e 全过。本机开着开发人员模式，「没开开发人员模式」的整机验证仍要另一台机器；新代码路径不再调用原生符号链接 API |
 | 取消要 5 秒 | 已修（libkrun `fix/vsock-unix-prompt-close`）。原因：Windows 上宿主对自己的 AF_UNIX 句柄 `shutdown` 叫不醒同一 socket 上阻塞的 `recv`，只能等 libkrun 关主机侧 socket，而 unix 代理要等 reaper 的 5 秒宽限期才关。现在 guest 一关连接就 `shutdown` 主机侧 socket。实测（MSVC，开不开网络一样）：取消 2～14 ms 返回，下一条命令约 10 ms；`ExecOptions.Timeout` 2 秒准时返回 124，原型记录的「晚 1～3 秒」也没了 |
-| 内存按上限提交、高段不归还 | 未做 |
+| 内存按上限提交、高段不归还 | 已做（libkrun `feat/whp-lazy-guest-ram`，默认开，`SMOLVM_WHP_LAZY_RAM=0` 关）。本机实测 2 GiB 档：开机后私有提交 194 MB（原来 2127 MB，即上限加 80 MB）；guest 填 1.2 GB 后 1210 MB；释放后回落到 257～758 MB（看 balloon 回收进度；原来一直 2133 MB 不降）。首次填 1 GB 用 0.28 秒（原来 0.21 秒；如果不预填、只按 64 KiB 提交，要 4.4 秒）。压力测试（填满、释放、马上做大量 virtio-fs 读和 vsock 输出，4 轮）每轮校验都一致；Windows e2e 全过。设计 10.4 里「Windows 在 F2 修好内存之前封顶 3 GiB」这一条可以重新评估 |
+| 建机偶发卡住（另案） | 压力配置（2 vCPU、2 GiB、挂载目录里有 96 MB 文件）下，原版（整块提交）干净跑 6 次卡 1 次：guest agent 已经起来、一直在接受连接，VMM CPU 为 0，主机的建机请求一直等不到回应。lazy 版 6 次没出现。简单配置 16 次都没出现。原因未查 |
 | 非 root 写 `/workspace` | 已修（smolvm `feat/windows-share-host-owner` + libkrun `feat/windows-virtiofs-host-owner`）。工作区共享报 uid/gid 1000；uid 1000 的工作负载直接能写，别的非 root 用户靠 agent 建容器时的 id 映射（按 `MachineConfig.User` 或镜像的 `USER`；单条命令的 `ExecOptions.User` 不映射，与上游在 macOS 上的行为相同）。e2e：smol `feat/windows-workspace-owner-test`，修前两种情况都 Permission denied |
 | 非管理员（无开发人员模式）、家庭版、Windows 10 | 需要别的机器 |
 
