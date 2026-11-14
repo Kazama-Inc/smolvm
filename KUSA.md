@@ -28,6 +28,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 |---|---|---|
 | `feat/windows-boot-helper` | Windows 上启动辅助程序的父进程看门狗（SDK 嵌入时宿主被杀，虚拟机随之退出，先请 guest 干净关机；原来 Windows 上没有，虚拟机会成孤儿）；`main()` 一开始 `SetDefaultDllDirectories`，不从当前目录和 PATH 加载 DLL | 暂不提上游 |
 | `feat/windows-state-dir` | Windows 上 `SMOLVM_DATA_DIR` 生效（`smolvm_pack::host_dirs`，各 crate 的 `dirs::` 调用都经它）；启动虚拟机前对状态目录做 AF_UNIX 自检（含 108 字节路径上限），失败直接报原因，不再等 40 秒超时 | 暂不提上游 |
+| `feat/windows-share-host-owner` | Windows 上用户共享带 `KRUN_VIRTIOFS_FLAG_HOST_OWNER`，主机文件报 uid 1000，agent 的 id 映射（`mount_owner`）把它映射给工作负载用户；libkrun 不认这个 flag 时照旧挂载 | 暂不提上游 |
 | （子模块） | `libkrun` 指向 `Kazama-Inc/libkrun` 的 `kusa`：Windows virtiofs 的 junction 穿越和「文件名带 `\`、`:` 写出共享目录」两处修复 | 见 libkrun 的 `KUSA.md` |
 
 ## Windows 加固（设计 10.5 的 F2）进度
@@ -41,7 +42,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | rootfs 解包不依赖符号链接权限 | 未做 |
 | 取消要 5 秒 | 已修（libkrun `fix/vsock-unix-prompt-close`）。原因：Windows 上宿主对自己的 AF_UNIX 句柄 `shutdown` 叫不醒同一 socket 上阻塞的 `recv`，只能等 libkrun 关主机侧 socket，而 unix 代理要等 reaper 的 5 秒宽限期才关。现在 guest 一关连接就 `shutdown` 主机侧 socket。实测（MSVC，开不开网络一样）：取消 2～14 ms 返回，下一条命令约 10 ms；`ExecOptions.Timeout` 2 秒准时返回 124，原型记录的「晚 1～3 秒」也没了 |
 | 内存按上限提交、高段不归还 | 未做 |
-| 非 root 写 `/workspace` | 未做。原因：agent 只在共享根属于非 root 时做 id 映射（`crates/smolvm-agent/src/mount_owner.rs`），而 Windows 服务端把所有文件报成 uid 0；要给每个共享传一个缺省属主（工作区共享报主机用户，guest rootfs 共享仍报 root），涉及 smolvm → libkrun 的接口。先在镜像里用 root 跑 |
+| 非 root 写 `/workspace` | 已修（smolvm `feat/windows-share-host-owner` + libkrun `feat/windows-virtiofs-host-owner`）。工作区共享报 uid/gid 1000；uid 1000 的工作负载直接能写，别的非 root 用户靠 agent 建容器时的 id 映射（按 `MachineConfig.User` 或镜像的 `USER`；单条命令的 `ExecOptions.User` 不映射，与上游在 macOS 上的行为相同）。e2e：smol `feat/windows-workspace-owner-test`，修前两种情况都 Permission denied |
 | 非管理员（无开发人员模式）、家庭版、Windows 10 | 需要别的机器 |
 
 补丁暂不提上游（11-14 用户决定）。上游三个仓库的 CI 都有 `no-ai-attribution` 检查，拒绝带 AI 署名的提交；本 fork 的提交带 `Co-Authored-By` 署名，将来要提时另行处理。
