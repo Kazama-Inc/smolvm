@@ -193,12 +193,20 @@ impl Store {
         let unpacked = self.staging_dir("unknown", "unpack")?;
         let result = (|| -> Result<(String, PathBuf)> {
             std::fs::create_dir(&unpacked)?;
-            let mut archive = tar::Archive::new(std::fs::File::open(tar)?);
-            archive.set_preserve_permissions(true);
-            archive.set_overwrite(true);
-            archive
-                .unpack(&unpacked)
+            // Windows: LX symlinks, as the installed rootfs has (no privilege
+            // needed; see smolvm_pack::lx_symlink).
+            #[cfg(windows)]
+            smolvm_pack::lx_symlink::unpack_rootfs(std::fs::File::open(tar)?, &unpacked)
                 .map_err(|e| Error::agent("unpack agent rootfs", e.to_string()))?;
+            #[cfg(not(windows))]
+            {
+                let mut archive = tar::Archive::new(std::fs::File::open(tar)?);
+                archive.set_preserve_permissions(true);
+                archive.set_overwrite(true);
+                archive
+                    .unpack(&unpacked)
+                    .map_err(|e| Error::agent("unpack agent rootfs", e.to_string()))?;
+            }
             let digest = smolvm_pack::assets::agent_rootfs_digest(&unpacked)
                 .map_err(|e| Error::agent("read agent rootfs", e.to_string()))?;
             let path = self.publish(&digest, &unpacked)?;
@@ -277,7 +285,14 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
         if kind.is_symlink() {
             #[cfg(unix)]
             std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &target)?;
-            #[cfg(not(unix))]
+            // A Windows rootfs keeps its links as LX symlinks, which neither
+            // copy as files nor need privilege to recreate.
+            #[cfg(windows)]
+            smolvm_pack::lx_symlink::create(
+                &target,
+                smolvm_pack::link_target(&entry.path())?.as_bytes(),
+            )?;
+            #[cfg(not(any(unix, windows)))]
             std::fs::copy(entry.path(), &target)?;
         } else if kind.is_dir() {
             copy_tree(&entry.path(), &target)?;

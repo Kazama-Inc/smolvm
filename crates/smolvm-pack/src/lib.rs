@@ -120,3 +120,18 @@ mod zero_tests {
         }
     }
 }
+
+/// The target of the symlink at `path`, as text. On Windows a Linux tree's
+/// links are LX symlinks (see [`lx_symlink`]), which `std::fs::read_link`
+/// does not read ("Unsupported reparse point type").
+pub fn link_target(path: &std::path::Path) -> std::io::Result<String> {
+    match std::fs::read_link(path) {
+        Ok(target) => Ok(target.to_string_lossy().into_owned()),
+        #[cfg(windows)]
+        Err(e) => lx_symlink::read(path)
+            .map(|target| String::from_utf8_lossy(&target).into_owned())
+            .map_err(|_| e),
+        #[cfg(not(windows))]
+        Err(e) => Err(e),
+    }
+}
