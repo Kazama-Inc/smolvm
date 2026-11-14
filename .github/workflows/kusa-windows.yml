@@ -233,7 +233,10 @@ jobs:
         if: steps.whp.outputs.available != 'true'
         run: echo "::warning::WHP is not available on this runner; VM tests did not run. They need a self-hosted Windows runner (or a larger hosted runner with virtualization)."
 
+      # Upload whenever packaging worked, so a red VM test still leaves the
+      # bundle to download and reproduce with.
       - uses: actions/upload-artifact@v4
+        if: always() && steps.package.outcome == 'success'
         with:
           name: smol-go-runtime-windows-x64
           path: |
