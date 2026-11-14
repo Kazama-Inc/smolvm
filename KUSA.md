@@ -35,11 +35,11 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | 项 | 状态 |
 |---|---|
 | junction 穿越（否决级） | 已修（libkrun `fix/windows-virtiofs-escapes`）。同时修了文件名带 `\`、`:` 写出共享目录（同为否决级，原型没发现）。按上游 `SECURITY.md` 走 GitHub 私密漏洞报告，报告待发 |
-| 从源码编 `krun.dll` | 已通（MSVC + musl 目标 + `rust-lld`）。定用 MSVC（11-14 用户确认）。已知 MSVC 版偶发「流式命令 1 秒内没起来」，上游 GNU 版没有，原因未查清 |
+| 从源码编 `krun.dll` | 已通（MSVC + musl 目标 + `rust-lld`）。定用 MSVC（11-14 用户确认）。原以为 MSVC 版偶发「流式命令 1 秒内没起来」，查明是测试的心跳只精确到秒（smol `fix/e2e-heartbeat-counter`），GNU 版同样会挂，与编法无关 |
 | 状态目录可配置 + AF_UNIX 自检 | 已做（`feat/windows-state-dir`） |
 | 父进程联动 | 已做（`feat/windows-boot-helper` 的看门狗 + SDK 的作业对象），有 e2e |
 | rootfs 解包不依赖符号链接权限 | 未做 |
-| 开网络时取消要 5 秒 | 未做。线索：取消靠对克隆的 AF_UNIX 句柄 `shutdown(Both)`（`src/embedded/exec.rs`），Windows 上未必及时叫醒阻塞的读；11-14 不开网络时也碰到一次取消卡死 |
+| 取消要 5 秒 | 未修，原因已查明（11-14）：不开网络也是整 5 秒。宿主取消时对克隆的 AF_UNIX 句柄 `shutdown(Both)`（`src/embedded/exec.rs`），Windows 上这叫不醒阻塞在同一 socket 上的 `recv`；libkrun 的 unix 代理（`vsock/unix.rs`）收到挂断后把代理交给 reaper，主机侧 socket 要等宽限期 `TIMEOUT` = 5 秒（`vsock/reaper.rs`）才关，`recv` 这时才返回。修法候选：代理进入 Closed 时立即 `shutdown` 主机侧 socket，宽限期只留给 guest。另见过一次超过 15 秒（GNU 版，1/10），未查 |
 | 内存按上限提交、高段不归还 | 未做 |
 | 非 root 写 `/workspace` | 未做。原因：agent 只在共享根属于非 root 时做 id 映射（`crates/smolvm-agent/src/mount_owner.rs`），而 Windows 服务端把所有文件报成 uid 0；要给每个共享传一个缺省属主（工作区共享报主机用户，guest rootfs 共享仍报 root），涉及 smolvm → libkrun 的接口。先在镜像里用 root 跑 |
 | 非管理员（无开发人员模式）、家庭版、Windows 10 | 需要别的机器 |
