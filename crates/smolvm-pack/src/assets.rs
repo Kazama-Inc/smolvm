@@ -697,7 +697,7 @@ fn decompress_sparse(src: &Path, dest: &Path) -> std::io::Result<()> {
             break;
         }
         let chunk = &buf[..filled];
-        if chunk.iter().any(|&b| b != 0) {
+        if has_data(chunk) {
             out.seek(SeekFrom::Start(offset))?;
             out.write_all(chunk)?;
         }
@@ -710,6 +710,17 @@ fn decompress_sparse(src: &Path, dest: &Path) -> std::io::Result<()> {
     file.set_len(offset)?;
     file.sync_all()?;
     Ok(())
+}
+
+/// Whether `chunk` holds a non-zero byte.
+///
+/// Folds each 4 KiB block without stopping early, which the compiler turns into
+/// wide vector ORs; a byte-wise `any` exits per byte, cannot be vectorised, and
+/// made expanding the 30 GiB of shipped templates take about 6 s instead of 1 s.
+fn has_data(chunk: &[u8]) -> bool {
+    chunk
+        .chunks(4096)
+        .any(|block| block.iter().fold(0u8, |acc, &b| acc | b) != 0)
 }
 
 /// Subdirectory of `layers/` holding the workspace seed. Shared with the guest
@@ -1994,6 +2005,18 @@ mod tests {
         add_template_root(dir.path().to_path_buf());
         add_template_root(dir.path().to_path_buf());
         assert_eq!(find_existing_template(name), Some(dir.path().join(name)));
+    }
+
+    #[test]
+    fn has_data_finds_a_single_non_zero_byte_anywhere() {
+        let mut chunk = vec![0u8; 512 * 1024 + 3];
+        assert!(!has_data(&chunk));
+        assert!(!has_data(&[]));
+        for at in [0, 4095, 4096, 300_000, chunk.len() - 1] {
+            chunk[at] = 1;
+            assert!(has_data(&chunk), "byte {at}");
+            chunk[at] = 0;
+        }
     }
 
     #[test]

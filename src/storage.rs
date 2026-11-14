@@ -732,7 +732,8 @@ impl<K: DiskType> VmDisk<K> {
             return Ok(());
         }
 
-        if let Some(template_path) = Self::template_path() {
+        let template = Self::template_path().filter(|t| self.template_suits(t));
+        if let Some(template_path) = template {
             disk_utils::copy_disk_from_template::<K>(&self.path, self.size_bytes, &template_path)?;
         } else {
             disk_utils::format_disk_with_mkfs::<K>(&self.path)?;
@@ -807,7 +808,8 @@ impl<K: DiskType> VmDisk<K> {
 
     /// Find a pre-formatted disk template.
     ///
-    /// Searches `~/.smolvm/` then the executable's directory, accepting either
+    /// Searches an embedder's registered template roots (an SDK's runtime
+    /// bundle), `~/.smolvm/`, then the executable's directory, accepting either
     /// the plain file or a `.zst` archive that is expanded to a sparse file on
     /// first use — releases ship the compressed form. Shared with the pack
     /// crate so both paths agree on where templates live and how they expand.
@@ -821,6 +823,32 @@ impl<K: DiskType> VmDisk<K> {
             );
         }
         found
+    }
+
+    /// Whether a copy of `template` becomes this disk cheaply.
+    ///
+    /// Windows has no host `resize2fs` to shrink a filesystem, and the guest
+    /// grows a never-mounted template offline, writing every new inode table:
+    /// taking a 512 MiB template to the default 20 GiB disk delays boot by
+    /// about 6.6 s. There a template is used only when its filesystem already
+    /// spans the disk; any other size starts blank and the guest formats it,
+    /// which costs a few hundred ms.
+    fn template_suits(&self, template: &Path) -> bool {
+        if !cfg!(windows) {
+            return true;
+        }
+        let fs_bytes = disk_utils::ext4_filesystem_bytes(template);
+        let suits = fs_bytes == Some(self.size_bytes);
+        if !suits {
+            tracing::debug!(
+                template = %template.display(),
+                template_bytes = ?fs_bytes,
+                disk_bytes = self.size_bytes,
+                disk_type = K::NAME,
+                "template does not match the disk size; the guest formats the disk"
+            );
+        }
+        suits
     }
 
     /// Get the path to the format marker file for a disk.
