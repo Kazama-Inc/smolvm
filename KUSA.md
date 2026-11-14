@@ -39,7 +39,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | 状态目录可配置 + AF_UNIX 自检 | 已做（`feat/windows-state-dir`） |
 | 父进程联动 | 已做（`feat/windows-boot-helper` 的看门狗 + SDK 的作业对象），有 e2e |
 | rootfs 解包不依赖符号链接权限 | 未做 |
-| 取消要 5 秒 | 未修，原因已查明（11-14）：不开网络也是整 5 秒。宿主取消时对克隆的 AF_UNIX 句柄 `shutdown(Both)`（`src/embedded/exec.rs`），Windows 上这叫不醒阻塞在同一 socket 上的 `recv`；libkrun 的 unix 代理（`vsock/unix.rs`）收到挂断后把代理交给 reaper，主机侧 socket 要等宽限期 `TIMEOUT` = 5 秒（`vsock/reaper.rs`）才关，`recv` 这时才返回。修法候选：代理进入 Closed 时立即 `shutdown` 主机侧 socket，宽限期只留给 guest。另见过一次超过 15 秒（GNU 版，1/10），未查 |
+| 取消要 5 秒 | 已修（libkrun `fix/vsock-unix-prompt-close`）。原因：Windows 上宿主对自己的 AF_UNIX 句柄 `shutdown` 叫不醒同一 socket 上阻塞的 `recv`，只能等 libkrun 关主机侧 socket，而 unix 代理要等 reaper 的 5 秒宽限期才关。现在 guest 一关连接就 `shutdown` 主机侧 socket。实测（MSVC，开不开网络一样）：取消 2～14 ms 返回，下一条命令约 10 ms；`ExecOptions.Timeout` 2 秒准时返回 124，原型记录的「晚 1～3 秒」也没了 |
 | 内存按上限提交、高段不归还 | 未做 |
 | 非 root 写 `/workspace` | 未做。原因：agent 只在共享根属于非 root 时做 id 映射（`crates/smolvm-agent/src/mount_owner.rs`），而 Windows 服务端把所有文件报成 uid 0；要给每个共享传一个缺省属主（工作区共享报主机用户，guest rootfs 共享仍报 root），涉及 smolvm → libkrun 的接口。先在镜像里用 root 跑 |
 | 非管理员（无开发人员模式）、家庭版、Windows 10 | 需要别的机器 |
