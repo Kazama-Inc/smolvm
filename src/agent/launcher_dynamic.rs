@@ -955,17 +955,21 @@ pub fn launch_agent_vm_dynamic(
         // A watched share keeps missing names for a second (see the mount
         // loop in `launcher.rs`); needs krun_add_virtiofs4.
         let negative_entries = !mount.staged && super::fsnotify_watch::watching_enabled();
+        // On Windows every user share also asks for a non-root owner (see
+        // `krun::user_share_flags`).
+        let flags = super::krun::user_share_flags(negative_entries);
         // SAFETY: ctx is valid, tag and host_path are valid C strings
         let mut added = -libc::EINVAL;
-        if let (true, Some(add_virtiofs4)) = (negative_entries, krun.add_virtiofs4) {
+        if let (true, Some(add_virtiofs4)) = (flags != 0, krun.add_virtiofs4) {
             added = unsafe {
-                add_virtiofs4(
+                super::krun::add_virtiofs4_dropping_unknown(
+                    add_virtiofs4,
                     ctx,
                     tag.as_ptr(),
                     host_path.as_ptr(),
                     dax_window,
                     mount.read_only,
-                    super::krun::KRUN_VIRTIOFS_FLAG_NEGATIVE_ENTRIES,
+                    flags,
                 )
             };
         }
