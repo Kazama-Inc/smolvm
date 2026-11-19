@@ -129,30 +129,7 @@ struct MountEntry {
     fstype: String,
 }
 
-/// Undo the octal escapes mountinfo uses for space, tab, newline and backslash.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn unescape(field: &str) -> String {
-    let bytes = field.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let octal = bytes
-            .get(i + 1..i + 4)
-            .filter(|digits| bytes[i] == b'\\' && digits.iter().all(|d| (b'0'..=b'7').contains(d)));
-        match octal.and_then(|digits| u8::from_str_radix(std::str::from_utf8(digits).ok()?, 8).ok())
-        {
-            Some(byte) => {
-                out.push(byte);
-                i += 4;
-            }
-            None => {
-                out.push(bytes[i]);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
+use crate::paths::unescape_mount_field as unescape;
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_mountinfo(mountinfo: &str) -> Vec<MountEntry> {
