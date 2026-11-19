@@ -113,6 +113,7 @@ impl MachineSpec {
             cache_disk,
             disk_volumes,
             block_private,
+            host_loopback_ports,
             allowed_cidrs,
             egress_rules,
             dns,
@@ -145,6 +146,7 @@ impl MachineSpec {
             allowed_cidrs,
             allowed_hosts: (!allowed_hosts.is_empty()).then_some(allowed_hosts),
             block_private,
+            host_loopback_ports,
             egress_rules,
             // A value comes from `supply_credential_values`, else from the
             // embedding process's own variable of the binding's name.

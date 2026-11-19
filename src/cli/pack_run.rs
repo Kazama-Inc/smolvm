@@ -677,6 +677,7 @@ impl PackRunCmd {
                 .egress
                 .as_ref()
                 .and_then(|policy| policy.block_private.clone()),
+            host_loopback_ports: Vec::new(),
             gpu_vram_mib: None,
             rosetta: false,
             allowed_cidrs: self
@@ -1928,6 +1929,7 @@ fn run_from_cache(
         cache_disk: None,
         disk_volumes: disk_volumes.clone(),
         block_private: None,
+        host_loopback_ports: Vec::new(),
         gpu_vram_mib: None,
         rosetta: false,
         allowed_cidrs: None,
@@ -2358,6 +2360,7 @@ fn daemon_start(
         cache_disk: None,
         disk_volumes: disk_volumes.clone(),
         block_private: None,
+        host_loopback_ports: Vec::new(),
         gpu_vram_mib: None,
         rosetta: false,
         allowed_cidrs: None,

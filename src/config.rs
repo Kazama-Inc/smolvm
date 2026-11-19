@@ -493,6 +493,11 @@ pub struct VmRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_private: Option<Vec<String>>,
 
+    /// Host loopback ports the guest may connect to. See
+    /// `VmResources::host_loopback_ports`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_loopback_ports: Vec<u16>,
+
     /// Volume mounts (host_path, guest_path, read_only).
     #[serde(default)]
     pub mounts: Vec<(String, String, bool)>,
@@ -990,6 +995,7 @@ impl VmRecord {
             cache_disk: None,
             disk_volumes: Vec::new(),
             block_private: None,
+            host_loopback_ports: Vec::new(),
             mounts,
             staged_mounts: Vec::new(),
             staged_mounts_detached_from: None,
@@ -1095,6 +1101,7 @@ impl VmRecord {
             cache_disk: None,
             disk_volumes: Vec::new(),
             block_private: None,
+            host_loopback_ports: Vec::new(),
             mounts,
             staged_mounts: Vec::new(),
             staged_mounts_detached_from: None,
@@ -1711,6 +1718,7 @@ impl VmRecord {
             cache_disk: self.cache_disk.clone(),
             disk_volumes: self.disk_volumes.clone(),
             block_private: self.block_private.clone(),
+            host_loopback_ports: self.host_loopback_ports.clone(),
             allowed_cidrs: self.allowed_cidrs.clone(),
             egress_rules: self.egress_rules.clone(),
             dns: self.dns,

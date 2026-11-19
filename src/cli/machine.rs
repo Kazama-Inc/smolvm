@@ -1940,6 +1940,7 @@ impl RunCmd {
             cache_disk: params.cache_disk.clone(),
             disk_volumes: disk_volumes.clone(),
             block_private: params.block_private.clone(),
+            host_loopback_ports: Vec::new(),
         };
         validate_requested_network_backend(
             &resources,

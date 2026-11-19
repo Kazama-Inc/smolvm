@@ -846,6 +846,7 @@ impl CreateVmParams {
             allowed_cidrs,
             allowed_hosts: dns_filter_hosts,
             block_private,
+            host_loopback_ports: Vec::new(),
             egress_rules,
             credentials: credential_policy,
             credentials_supplied_only: false,

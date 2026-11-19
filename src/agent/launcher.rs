@@ -1221,6 +1221,16 @@ pub fn launch_agent_vm(config: &LaunchConfig<'_>) -> Result<()> {
 
                 start_tsi_dns_forwarder(ctx, krun.set_dns_forwarder, resources.dns);
 
+                // The plan only picks TSI with host loopback ports when the
+                // caller asked for it; TSI has no gateway to reach them through.
+                if !resources.host_loopback_ports.is_empty() {
+                    krun_free_ctx(ctx);
+                    return Err(Error::agent(
+                        "open host loopback ports",
+                        "host loopback ports need the virtio-net network backend",
+                    ));
+                }
+
                 // TSI terminates guest connects inside libkrun, so redirecting
                 // HTTPS flows to the interceptor needs the fork's hook; without
                 // it a credential policy cannot be enforced on this backend.
@@ -1396,12 +1406,24 @@ pub fn launch_agent_vm(config: &LaunchConfig<'_>) -> Result<()> {
                 let denial_log = vsock_socket
                     .parent()
                     .map(|dir| dir.join(smolvm_network::EGRESS_DENIALS_LOG));
+                // Host loopback ports go first: an allow for each on the
+                // gateway (which the stack dials as host loopback), then a deny
+                // for the gateway's other ports, so only these reach the host
+                // whatever the rest of the policy says.
+                let egress_rules = crate::network::launch::host_loopback_rules(
+                    &resources.host_loopback_ports,
+                    guest_network.gateway_ip,
+                    guest_network.gateway_ip6,
+                )
+                .into_iter()
+                .chain(resources.egress_rules.iter().cloned())
+                .collect::<Vec<_>>();
                 let mut egress = if network_plan.outbound {
                     smolvm_network::EgressPolicy::new(
                         resources.allowed_cidrs.as_deref(),
                         egress_refresh_hosts.as_deref(),
                     )
-                    .with_rules(&resources.egress_rules)
+                    .with_rules(&egress_rules)
                     .and_then(|policy| match &resources.block_private {
                         Some(exceptions) => policy.with_private_floor(exceptions),
                         None => Ok(policy),

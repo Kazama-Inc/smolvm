@@ -210,6 +210,14 @@ pub struct VmResources {
     /// CIDR (`--allow-private`) re-opens its range. Cloud metadata stays closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_private: Option<Vec<String>>,
+    /// Ports on the host's loopback the guest may open TCP connections to,
+    /// whatever the egress floor and policy: a service the host runs only for
+    /// this machine, such as a proxy listening on 127.0.0.1. The guest reaches
+    /// one at its gateway address (`<gateway>:<port>`, 100.96.0.1 by default);
+    /// no other port of the host's loopback opens. Forces the virtio-net
+    /// backend.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_loopback_ports: Vec<u16>,
     /// Allowed egress CIDR ranges. None = unrestricted, Some([]) = deny all.
     #[serde(default)]
     pub allowed_cidrs: Option<Vec<String>>,
@@ -325,6 +333,7 @@ impl Default for VmResources {
             cache_disk: None,
             disk_volumes: Vec::new(),
             block_private: None,
+            host_loopback_ports: Vec::new(),
             allowed_cidrs: None,
             egress_rules: Vec::new(),
             dns: None,

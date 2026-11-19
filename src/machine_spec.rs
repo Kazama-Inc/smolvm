@@ -152,6 +152,9 @@ pub struct CreateSpec {
     pub allowed_hosts: Option<Vec<String>>,
     /// Block private destinations, with these exceptions.
     pub block_private: Option<Vec<String>>,
+    /// Host loopback ports the guest may connect to. See
+    /// `VmResources::host_loopback_ports`.
+    pub host_loopback_ports: Vec<u16>,
     /// Ordered L4 egress rules.
     pub egress_rules: Vec<EgressRule>,
     /// Credential bindings.
@@ -275,6 +278,7 @@ impl CreateSpec {
             allowed_cidrs,
             allowed_hosts,
             block_private,
+            host_loopback_ports,
             egress_rules,
             credentials,
             credentials_supplied_only,
@@ -342,6 +346,7 @@ impl CreateSpec {
             allowed_cidrs: opt_list(self.allowed_cidrs, allowed_cidrs),
             allowed_hosts: opt_list(self.allowed_hosts, allowed_hosts),
             block_private: opt_list(self.block_private, block_private),
+            host_loopback_ports: replace(self.host_loopback_ports, host_loopback_ports),
             egress_rules: replace(self.egress_rules, egress_rules),
             credentials: match (self.credentials, credentials) {
                 (Some(mut base), Some(top)) => {
@@ -527,6 +532,9 @@ pub struct ResolvedSpec {
     pub allowed_hosts: Option<Vec<String>>,
     /// Private-range block and exceptions.
     pub block_private: Option<Vec<String>>,
+    /// Host loopback ports the guest may connect to. See
+    /// `VmResources::host_loopback_ports`.
+    pub host_loopback_ports: Vec<u16>,
     /// Egress rules.
     pub egress_rules: Vec<EgressRule>,
     /// Credential bindings.
@@ -766,6 +774,7 @@ pub fn resolve(source: SpecSource<'_>, spec: CreateSpec, caller: Caller) -> Resu
         allowed_cidrs,
         allowed_hosts,
         block_private,
+        host_loopback_ports,
         egress_rules,
         credentials,
         credentials_supplied_only,
@@ -970,6 +979,7 @@ pub fn resolve(source: SpecSource<'_>, spec: CreateSpec, caller: Caller) -> Resu
                 allowed_cidrs,
                 allowed_hosts,
                 block_private,
+                host_loopback_ports,
                 egress_rules,
                 credentials,
                 credentials_supplied_only,
@@ -1051,6 +1061,7 @@ pub fn resolve(source: SpecSource<'_>, spec: CreateSpec, caller: Caller) -> Resu
                 allowed_cidrs,
                 allowed_hosts,
                 block_private,
+                host_loopback_ports,
                 egress_rules,
                 credentials,
                 credentials_supplied_only,
@@ -1339,6 +1350,7 @@ pub fn resolve(source: SpecSource<'_>, spec: CreateSpec, caller: Caller) -> Resu
                 allowed_cidrs,
                 allowed_hosts,
                 block_private,
+                host_loopback_ports,
                 egress_rules,
                 credentials,
                 // Bindings a checkpoint brings never read this host's environment.
@@ -1435,6 +1447,7 @@ impl ResolvedSpec {
             cache_disk: self.cache_disk.clone(),
             disk_volumes: self.disk_volumes.clone(),
             block_private: self.block_private.clone(),
+            host_loopback_ports: self.host_loopback_ports.clone(),
             allowed_cidrs: self.allowed_cidrs.clone(),
             egress_rules: self.egress_rules.clone(),
             dns: self.dns,
@@ -1461,6 +1474,7 @@ impl ResolvedSpec {
         record.allowed_cidrs = self.allowed_cidrs.clone();
         record.egress_rules = self.egress_rules.clone();
         record.block_private = self.block_private.clone();
+        record.host_loopback_ports = self.host_loopback_ports.clone();
         record.dns_filter_hosts = self.allowed_hosts.clone();
         record.network_name = self.network_name.clone();
         record.guest_subnet = self.guest_subnet.clone();
@@ -1530,6 +1544,7 @@ impl ResolvedSpec {
             allowed_cidrs,
             allowed_hosts,
             block_private,
+            host_loopback_ports,
             egress_rules,
             credentials,
             // Read through `credentials_supplied_by_api` below.
@@ -1582,6 +1597,7 @@ impl ResolvedSpec {
             cache_disk,
             disk_volumes,
             block_private,
+            host_loopback_ports,
             mounts,
             staged_mounts,
             staged_mounts_detached_from: None,
