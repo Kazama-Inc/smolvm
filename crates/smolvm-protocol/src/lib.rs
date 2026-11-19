@@ -59,6 +59,7 @@ pub mod host_pattern;
 pub mod image_ref;
 pub mod intercept;
 pub mod mediated_egress;
+pub mod mount_env;
 pub mod publish_socket;
 pub mod resolv;
 pub mod retry;

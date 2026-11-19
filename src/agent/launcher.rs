@@ -2436,7 +2436,8 @@ pub fn launch_agent_vm(config: &LaunchConfig<'_>) -> Result<()> {
         }
 
         // Pass mount info to the agent via environment
-        // Format: SMOLVM_MOUNT_0=tag:guest_path:ro
+        // Format: SMOLVM_MOUNT_0=tag:guest_path:ro, the guest path
+        // percent-encoded so any path survives the kernel command line.
         for (i, mount) in mounts.iter().enumerate() {
             let mount_tag = mount.runtime_mount_tag(i);
             let mode = if mount.staged {
@@ -2450,7 +2451,7 @@ pub fn launch_agent_vm(config: &LaunchConfig<'_>) -> Result<()> {
                 "SMOLVM_MOUNT_{}={}:{}:{}",
                 i,
                 mount_tag,
-                mount.target.display(),
+                smolvm_protocol::mount_env::encode_path(&mount.target.to_string_lossy()),
                 mode
             );
             if let Ok(cstr) = CString::new(env_val) {

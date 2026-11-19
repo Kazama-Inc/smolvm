@@ -413,15 +413,7 @@ fn verify_filesystem_capacity(bytes: u64, block_size: u64, expected: u64) -> io:
     Ok(())
 }
 
-fn unescape_mount_path(value: &str) -> String {
-    // These are the four escapes emitted by procfs for mount paths. Decode
-    // backslash last so a literal backslash plus digits is not decoded twice.
-    value
-        .replace("\\040", " ")
-        .replace("\\011", "\t")
-        .replace("\\012", "\n")
-        .replace("\\134", "\\")
-}
+use crate::paths::unescape_mount_field as unescape_mount_path;
 
 pub(crate) fn grow_filesystem(
     disk: ManagedDisk,

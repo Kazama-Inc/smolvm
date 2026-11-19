@@ -606,7 +606,11 @@ pub fn init_volume_mounts() -> &'static [(String, String, bool)] {
                 continue;
             }
             let tag = parts[0].to_string();
-            let guest_path = parts[1].to_string();
+            let Some(guest_path) = smolvm_protocol::mount_env::decode_path(parts[1]) else {
+                BOOT_VOLUME_MOUNTS_FAILED.store(true, std::sync::atomic::Ordering::Release);
+                warn!(key = %env_key, value = %env_val, "invalid guest path encoding in mount");
+                continue;
+            };
             let read_only = parts[2] == "ro";
 
             info!(tag = %tag, guest_path = %guest_path, read_only, staged, "boot volume mount");
@@ -5031,7 +5035,7 @@ pub fn cleanup_overlay(workload_id: &str) -> Result<()> {
                     return None;
                 }
 
-                let mount_point = PathBuf::from(parts[1]);
+                let mount_point = PathBuf::from(paths::unescape_mount_field(parts[1]));
                 let mount_point_str = mount_point.to_string_lossy();
                 if mount_point_str.starts_with(&merged_prefix) {
                     Some(mount_point)

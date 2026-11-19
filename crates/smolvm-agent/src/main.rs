@@ -1897,9 +1897,11 @@ fn grow_mounted_ext4(disk: smolvm_protocol::ManagedDisk, label: &str) {
 /// Check /proc/mounts to see if anything is mounted at the given path.
 fn is_mounted_at(mount_point: &str) -> bool {
     if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
-        return mounts
-            .lines()
-            .any(|line| line.split_whitespace().nth(1) == Some(mount_point));
+        return mounts.lines().any(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .is_some_and(|field| paths::unescape_mount_field(field) == mount_point)
+        });
     }
     false
 }

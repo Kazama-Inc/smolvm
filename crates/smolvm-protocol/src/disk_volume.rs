@@ -52,9 +52,14 @@ pub fn normalize_target(target: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
-/// Join normalized targets into the env value.
+/// Join normalized targets into the env value, each percent-encoded so any
+/// path survives the kernel command line (see [`crate::mount_env`]).
 pub fn encode(targets: &[String]) -> String {
-    targets.join(&SEPARATOR.to_string())
+    targets
+        .iter()
+        .map(|t| crate::mount_env::encode_path(t))
+        .collect::<Vec<_>>()
+        .join(&SEPARATOR.to_string())
 }
 
 /// Split the env value back into targets, dropping any that fail validation so
@@ -63,7 +68,8 @@ pub fn decode(value: &str) -> Vec<String> {
     value
         .split(SEPARATOR)
         .filter(|t| !t.is_empty())
-        .filter_map(|t| normalize_target(t).ok())
+        .filter_map(crate::mount_env::decode_path)
+        .filter_map(|t| normalize_target(&t).ok())
         .collect()
 }
 
@@ -111,8 +117,11 @@ mod tests {
         let targets = vec![
             "/var/lib/docker".to_string(),
             "/var/lib/containerd".to_string(),
+            "/data/项目 一".to_string(),
         ];
-        assert_eq!(decode(&encode(&targets)), targets);
+        let encoded = encode(&targets);
+        assert!(encoded.is_ascii() && !encoded.contains(' '), "{encoded}");
+        assert_eq!(decode(&encoded), targets);
         assert_eq!(decode("/ok::relative:/proc/x"), vec!["/ok".to_string()]);
     }
 

@@ -799,7 +799,10 @@ pub fn launch_agent_vm_dynamic(
         };
         let env_val = format!(
             "SMOLVM_MOUNT_{}={}:{}:{}",
-            i, mount.runtime_tag, mount.guest_path, mode
+            i,
+            mount.runtime_tag,
+            smolvm_protocol::mount_env::encode_path(&mount.guest_path),
+            mode
         );
         if let Ok(cstr) = CString::new(env_val) {
             env_strings.push(cstr);
