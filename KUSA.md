@@ -32,6 +32,7 @@ libkrunfw 不 fork：`libkrunfw.dll` 用本仓库 `lib/windows-x86_64/` 里上�
 | `feat/windows-rootfs-lx-symlinks` | Windows 上 agent rootfs 和镜像层的符号链接存成 WSL 式 LX 链接（`smolvm_pack::lx_symlink`），不再需要开发人员模式或管理员；rootfs 改在进程内解包（不用系统 `tar`）；摘要、rootfs 仓库拷贝、checkpoint 解包、pack 打包都能读写 LX 链接 | 暂不提上游 |
 | `fix/windows-disk-templates` | Windows 上只在模板的文件系统正好等于磁盘大小时才用存储盘、overlay 盘模板，别的大小照旧留空白盘由 guest 格式化：主机没有 `resize2fs` 缩不了，guest 离线扩一个从没挂载过的小模板要写全部新 inode 表，512 MiB 扩到 20 GiB 让启动慢 6.6 秒。`.zst` 模板稀疏解压时判断全零改成按 4 KiB 块折叠（可向量化），30 GiB 逻辑大小的模板首次解压从约 6 秒降到约 1 秒 | 暂不提上游 |
 | `feat/host-loopback-ports` | `VmResources.host_loopback_ports`：只开放宿主回环上的指定端口给这台机器（典型是只监听 127.0.0.1 的代理）。走 virtio-net，guest 用 `<网关>:<端口>`（缺省 100.96.0.1）连；出站规则最前面每个端口一条「TCP 到网关该端口：允许」，再一条「网关其余端口：拒绝」，`--block-private` 下照样可用，别的回环端口不论策略如何都连不上。CLI 暂不暴露，Go SDK 的 `MachineConfig.Proxy` / `ResourceSpec.HostLoopbackPorts` 用 | 暂不提上游 |
+| `fix/mount-target-path-encoding` | 挂载目标（guest 路径）带中文、空格、冒号、引号时也能用：`SMOLVM_MOUNT_*` 和 `SMOLVM_DISK_VOLUMES` 里的 guest 路径百分号编码成 ASCII 再交给 libkrun 拼内核命令行（`smolvm_protocol::mount_env`，普通路径不变），agent 解码；agent 比较 `/proc/mounts` 前先还原 ` ` 这类转义（`paths::unescape_mount_field`，顺带合掉两份重复实现）。修前中文目标让 VMM 进程中止，空格目标开机报「boot volume mount was not restored」 | 暂不提上游 |
 | （子模块） | `libkrun` 指向 `Kazama-Inc/libkrun` 的 `kusa`：Windows virtiofs 的 junction 穿越和「文件名带 `\`、`:` 写出共享目录」两处修复 | 见 libkrun 的 `KUSA.md` |
 
 ## Windows 加固（设计 10.5 的 F2）进度
