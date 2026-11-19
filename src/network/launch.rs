@@ -56,6 +56,47 @@ pub fn guest_host_service(
     }))
 }
 
+/// Egress rules that let the guest reach `ports` on the host's loopback, and no
+/// other port of it, through the virtio gateway. The gateway stack dials a
+/// connect to its own address as host loopback (the slirp convention), so the
+/// guest uses `gateway:<port>`. Each port gets an allow; then every other port
+/// on the gateway is denied, which also closes what a machine with no policy
+/// would otherwise reach there. Empty when `ports` is.
+pub fn host_loopback_rules(
+    ports: &[u16],
+    gateway: std::net::Ipv4Addr,
+    gateway6: std::net::Ipv6Addr,
+) -> Vec<smolvm_protocol::EgressRule> {
+    use smolvm_protocol::{EgressRule, FlowTransport, PortRange, RuleAction};
+    if ports.is_empty() {
+        return Vec::new();
+    }
+    let gateways = [format!("{gateway}/32"), format!("{gateway6}/128")];
+    let mut rules = Vec::new();
+    for &port in ports {
+        for cidr in &gateways {
+            rules.push(EgressRule {
+                transport: Some(FlowTransport::Tcp),
+                cidr: Some(cidr.clone()),
+                ports: Some(PortRange {
+                    start: port,
+                    end: port,
+                }),
+                action: RuleAction::Allow,
+            });
+        }
+    }
+    for cidr in gateways {
+        rules.push(EgressRule {
+            transport: None,
+            cidr: Some(cidr),
+            ports: None,
+            action: RuleAction::Deny,
+        });
+    }
+    rules
+}
+
 /// Effective backend selected for a launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectiveNetworkBackend {
@@ -134,6 +175,8 @@ pub fn plan_launch_network_with(
         || resources.block_private.is_some();
     let has_dns_filter = dns_filter_hosts.is_some();
     let has_host_service = guest_host_service_configured();
+    // The guest reaches host loopback ports through the virtio gateway.
+    let has_host_loopback_ports = !resources.host_loopback_ports.is_empty();
     let has_fabric = resources.network_name.is_some();
     // A custom guest subnet shapes the virtio-net link, so like a named
     // network it implies networking and picks virtio-net.
@@ -194,6 +237,7 @@ pub fn plan_launch_network_with(
             || has_credentials
             || has_dns_filter
             || has_host_service
+            || has_host_loopback_ports
             || has_fabric
             || has_guest_subnet
         {
@@ -347,6 +391,8 @@ pub fn validate_requested_network_backend(
         || resources.block_private.is_some()
         || dns_filter_hosts.is_some();
     let has_host_service = guest_host_service_configured();
+    // The guest reaches host loopback ports through the virtio gateway.
+    let has_host_loopback_ports = !resources.host_loopback_ports.is_empty();
 
     // Mirror plan_launch_network's default: unset backend + (ports OR egress
     // policy) ⇒ virtio-net. So only an EXPLICIT `--net-backend tsi` alongside
@@ -355,6 +401,7 @@ pub fn validate_requested_network_backend(
         if port_count > 0
             || has_egress_policy
             || has_host_service
+            || has_host_loopback_ports
             || resources.network_name.is_some()
             || resources.guest_subnet.is_some()
         {
@@ -371,6 +418,14 @@ pub fn validate_requested_network_backend(
             "ports",
             "published ports require the virtio-net backend (TSI is outbound-only); \
              remove --net-backend tsi or set it to virtio-net",
+        ));
+    }
+
+    // Host loopback ports are reached through the virtio gateway; TSI has none.
+    if has_host_loopback_ports && backend != NetworkBackend::VirtioNet {
+        return Err(crate::Error::config(
+            "host loopback ports",
+            "host loopback ports require the virtio-net backend; do not force TSI",
         ));
     }
 
@@ -474,6 +529,58 @@ mod tests {
         let plan = plan_launch_network(&tsi, None, 0);
         assert_eq!(plan.backend, EffectiveNetworkBackend::Tsi);
         assert!(plan.outbound);
+    }
+
+    #[test]
+    fn host_loopback_ports_need_virtio_net() {
+        let mut resources = resources();
+        resources.network = true;
+        resources.host_loopback_ports = vec![7890];
+        let plan = plan_launch_network(&resources, None, 0);
+        assert_eq!(plan.backend, EffectiveNetworkBackend::VirtioNet);
+        assert!(validate_requested_network_backend(&resources, None, 0).is_ok());
+        resources.network_backend = Some(NetworkBackend::Tsi);
+        assert!(validate_requested_network_backend(&resources, None, 0).is_err());
+    }
+
+    /// Under --block-private, and with no policy at all, the gateway reaches
+    /// exactly the listed host loopback ports; the public internet stays open.
+    #[test]
+    fn host_loopback_rules_open_only_the_listed_ports_on_the_gateway() {
+        use smolvm_protocol::FlowTransport::Tcp;
+        let defaults = smolvm_network::GuestNetworkConfig::default();
+        let (gw, gw6) = (defaults.gateway_ip, defaults.gateway_ip6);
+        let rules = host_loopback_rules(&[7890], gw, gw6);
+        assert!(host_loopback_rules(&[], gw, gw6).is_empty());
+        let public: std::net::IpAddr = [1, 1, 1, 1].into();
+        for block_private in [true, false] {
+            let mut policy = smolvm_network::EgressPolicy::new(None, None)
+                .with_rules(&rules)
+                .unwrap();
+            if block_private {
+                policy = policy.with_private_floor(&[]).unwrap();
+            }
+            assert!(
+                policy.allows_flow(Tcp, gw.into(), Some(7890)),
+                "{block_private}"
+            );
+            assert!(
+                policy.allows_flow(Tcp, gw6.into(), Some(7890)),
+                "{block_private}"
+            );
+            assert!(
+                !policy.allows_flow(Tcp, gw.into(), Some(22)),
+                "{block_private}"
+            );
+            assert!(
+                !policy.allows_flow(Tcp, gw6.into(), Some(9080)),
+                "{block_private}"
+            );
+            assert!(
+                policy.allows_flow(Tcp, public, Some(443)),
+                "{block_private}"
+            );
+        }
     }
 
     #[test]

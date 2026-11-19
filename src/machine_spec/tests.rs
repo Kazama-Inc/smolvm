@@ -685,6 +685,7 @@ fn cases() -> Vec<Case> {
         allowed_cidrs,
         allowed_hosts,
         block_private,
+        host_loopback_ports: _,
         egress_rules,
         credentials,
         credentials_supplied_only,

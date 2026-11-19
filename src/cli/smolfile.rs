@@ -448,6 +448,7 @@ pub fn build_create_spec(
             allowed_cidrs,
             allowed_hosts: (!sf_allow_hosts.is_empty()).then_some(sf_allow_hosts),
             block_private,
+            host_loopback_ports: Vec::new(),
             egress_rules,
             credentials: (!network.credentials.is_empty()).then_some(
                 smolvm::credentials::CredentialPolicy {
@@ -575,6 +576,7 @@ pub fn build_create_params(
         allowed_cidrs,
         allowed_hosts,
         block_private,
+        host_loopback_ports: _,
         egress_rules,
         credentials,
         // `machine run` reads credential values from this host.
