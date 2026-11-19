@@ -2,7 +2,9 @@
 //!
 //! Bare entries retain the original exact-or-subdomain behavior. New strict
 //! entries use `=host` for exact matching or `*.host` for subdomains only.
-//! The `=` prefix is internal; users write `--allow-host-pattern host`.
+//! The CLI spells strict entries `--allow-host-pattern host`; an SDK host list
+//! goes through [`encode_entry`], where a bare name keeps the name and its
+//! subdomains and `=host` asks for the exact name.
 //! Host syntax follows RFC 1035 §§2.3.1, 2.3.4, 3.1 and RFC 1123 §2.1.
 
 /// Encode an opt-in host pattern for storage alongside legacy entries.
@@ -44,6 +46,27 @@ pub fn encode_strict(pattern: &str) -> Result<String, String> {
         format!("*.{}", host.to_ascii_lowercase())
     } else {
         format!("={}", host.to_ascii_lowercase())
+    })
+}
+
+/// Encode one entry of an SDK host list for storage: `example.com` allows the
+/// name and its subdomains (stored bare, as `machine create` stores its
+/// allowed hosts), `*.example.com` its subdomains only, and `=example.com`
+/// that name only. Every form is validated as [`encode_strict`] validates a
+/// pattern.
+pub fn encode_entry(entry: &str) -> Result<String, String> {
+    if let Some(exact) = entry.strip_prefix('=') {
+        if exact.starts_with("*.") {
+            return Err(format!(
+                "invalid host pattern {entry:?}: `=` takes an exact DNS hostname"
+            ));
+        }
+        return encode_strict(exact);
+    }
+    let strict = encode_strict(entry)?;
+    Ok(match strict.strip_prefix('=') {
+        Some(bare) => bare.to_string(),
+        None => strict,
     })
 }
 
@@ -132,5 +155,35 @@ mod tests {
         assert!(encode_strict(&longest_name).is_ok());
         assert!(encode_strict(&format!("{longest_name}d")).is_err());
         assert!(encode_strict(&"a".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn sdk_entries_default_to_the_name_and_its_subdomains() {
+        let bare = encode_entry("GitHub.com.").unwrap();
+        assert_eq!(bare, "github.com");
+        assert!(matches("github.com", &bare));
+        assert!(matches("api.github.com", &bare));
+        assert!(!matches("notgithub.com", &bare));
+
+        let wildcard = encode_entry("*.github.com").unwrap();
+        assert_eq!(wildcard, "*.github.com");
+        assert!(matches("api.github.com", &wildcard));
+        assert!(!matches("github.com", &wildcard));
+
+        let exact = encode_entry("=api.github.com").unwrap();
+        assert_eq!(exact, "=api.github.com");
+        assert!(matches("api.github.com", &exact));
+        assert!(!matches("x.api.github.com", &exact));
+
+        for bad in [
+            "",
+            "=",
+            "=*.github.com",
+            "==github.com",
+            "not a host",
+            "10.0.0.1",
+        ] {
+            assert!(encode_entry(bad).is_err(), "{bad}");
+        }
     }
 }

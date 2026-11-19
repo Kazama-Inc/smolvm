@@ -1424,10 +1424,11 @@ impl VmRecord {
     /// Replace this machine's outbound network policy. The machine must be
     /// stopped; the caller persists the record.
     ///
-    /// Host names are stored in the strict form (`api.github.com` exact,
-    /// `*.github.com` subdomains only) and CIDRs normalized, with the same
-    /// validation create applies. A credential binding must stay reachable under
-    /// the new host list.
+    /// Host names mean what they mean at create: `github.com` allows the name
+    /// and its subdomains, `*.github.com` its subdomains only and
+    /// `=github.com` that name only (see
+    /// [`smolvm_protocol::host_pattern::encode_entry`]). CIDRs are normalized.
+    /// A credential binding must stay reachable under the new host list.
     ///
     /// A machine that resumes saved memory on its next start (restored from a
     /// checkpoint, or paused) keeps the network device it was saved with, so a
@@ -1445,7 +1446,7 @@ impl VmRecord {
         let hosts = policy
             .hosts
             .iter()
-            .map(|host| smolvm_protocol::host_pattern::encode_strict(host.trim()))
+            .map(|host| smolvm_protocol::host_pattern::encode_entry(host.trim()))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|reason| crate::Error::config("egress policy", reason))?;
         self.replace_egress(policy.network, cidrs, hosts)
@@ -1550,8 +1551,13 @@ impl VmRecord {
 
         for host in &update.remove_allow_hosts {
             let strict = encode_strict(host.trim()).ok();
+            let entry = smolvm_protocol::host_pattern::encode_entry(host.trim()).ok();
             let before = hosts.len();
-            hosts.retain(|stored| stored != host.trim() && Some(stored) != strict.as_ref());
+            hosts.retain(|stored| {
+                stored != host.trim()
+                    && Some(stored) != strict.as_ref()
+                    && Some(stored) != entry.as_ref()
+            });
             if hosts.len() == before {
                 return Err(crate::Error::config(
                     "update",
@@ -2864,17 +2870,22 @@ mod tests {
     }
 
     #[test]
-    fn an_egress_policy_stores_strict_hosts_and_normalized_cidrs() {
+    fn an_egress_policy_stores_hosts_as_create_does_and_normalizes_cidrs() {
         let mut record = networked("hosts");
         record
             .apply_egress_policy(&network::EgressPolicy::hosts([
                 "github.com",
-                "*.github.com",
+                "*.example.com",
+                "=api.example.org",
             ]))
             .unwrap();
         assert_eq!(
             record.dns_filter_hosts,
-            Some(vec!["=github.com".to_string(), "*.github.com".to_string()])
+            Some(vec![
+                "github.com".to_string(),
+                "*.example.com".to_string(),
+                "=api.example.org".to_string(),
+            ])
         );
         assert_eq!(record.allowed_cidrs, None);
         assert!(record.network);
@@ -2897,6 +2908,49 @@ mod tests {
                 record.dns_filter_hosts.clone()
             ),
             (None, None)
+        );
+    }
+
+    #[test]
+    fn a_host_list_means_the_same_at_create_and_in_a_later_policy() {
+        // Create stores its allowed hosts as given; a later policy goes
+        // through `apply_egress_policy`. The same list must admit the same
+        // names either way.
+        let list = ["github.com", "*.example.com", "=api.example.org"];
+        let created: Vec<String> = list.iter().map(|h| h.to_string()).collect();
+        let mut record = networked("same");
+        record
+            .apply_egress_policy(&network::EgressPolicy::hosts(list))
+            .unwrap();
+        let replaced = record.dns_filter_hosts.clone().unwrap();
+        let admits = |entries: &[String], name: &str| {
+            entries
+                .iter()
+                .any(|entry| smolvm_protocol::host_pattern::matches(name, entry))
+        };
+        for (name, allowed) in [
+            ("github.com", true),
+            ("api.github.com", true),
+            ("notgithub.com", false),
+            ("example.com", false),
+            ("www.example.com", true),
+            ("api.example.org", true),
+            ("x.api.example.org", false),
+            ("example.org", false),
+        ] {
+            assert_eq!(admits(&created, name), allowed, "create: {name}");
+            assert_eq!(admits(&replaced, name), allowed, "policy: {name}");
+        }
+
+        // A name added by policy can be removed the way it was written.
+        let update = EgressUpdate {
+            remove_allow_hosts: vec!["GitHub.com".into(), "=api.example.org".into()],
+            ..Default::default()
+        };
+        let updated = record.updated_egress(&update).unwrap().unwrap();
+        assert_eq!(
+            updated.dns_filter_hosts,
+            Some(vec!["*.example.com".to_string()])
         );
     }
 

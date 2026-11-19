@@ -1002,9 +1002,10 @@ mod tests {
 
 /// A machine's outbound network policy, as it can be set on a stopped machine.
 ///
-/// `hosts` entries are exact host names (`api.github.com`) or subdomain
-/// wildcards (`*.github.com`, which does not match `github.com` itself); they
-/// are enforced by the host-side DNS filter. `cidrs` restrict egress by address.
+/// `hosts` entries mean what create's allowed hosts mean: `github.com` allows
+/// the name and its subdomains, `*.github.com` its subdomains only (not
+/// `github.com` itself), and `=github.com` that name only. They are enforced by
+/// the host-side DNS filter. `cidrs` restrict egress by address.
 /// With both empty and `network` set, egress is open.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EgressPolicy {
